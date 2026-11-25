@@ -47,7 +47,7 @@ final class WorkspaceManager {
         }
         // Moved out of its parking spot by the user or an app (e.g. a layout): no longer parked.
         engine.onUpdate { [unowned self] w in
-            guard isActive, let e = state.parked(w.id), !parksInFlight.contains(w.id) else { return }
+            guard isActive, let e = state.parked(w.id), !moves.isParking(w.id) else { return }
             if e.px == nil {
                 // Parked, but its spot was never read back: learn it from this frame if the
                 // window is still off screen; if it's back on screen, it's no longer parked.
@@ -152,9 +152,9 @@ final class WorkspaceManager {
         lastSwitch = PerformanceMonitor.now()
 
         var parks: [CGWindowID] = []
-        for (z, id) in visibleWindows(on: display).enumerated() {
+        for (z, id) in leaving(display).enumerated() {
             guard let w = engine.windows[id] else { continue }
-            state.hidden[String(id)] = entry(for: w.frame, ws: cur, display: display, z: z + 1)
+            state.hidden[String(id)] = entry(for: moves.restoreTarget(id) ?? w.frame, ws: cur, display: display, z: z + 1)
             parks.append(id)
         }
         var restores: [(CGWindowID, CGRect)] = []
@@ -192,7 +192,7 @@ final class WorkspaceManager {
               let d = Geometry.display(for: w.frame, in: displays.displays) else { return }
         guard n != state.activeWorkspace(d.uuid) else { return }
         lastSwitch = PerformanceMonitor.now()
-        state.hidden[String(id)] = entry(for: w.frame, ws: n, display: d, z: 0)
+        state.hidden[String(id)] = entry(for: moves.restoreTarget(id) ?? w.frame, ws: n, display: d, z: 0)
         run(parks: [id], home: d, restores: []) { [weak self] in
             self?.save()
             self?.focusTopOrNothing(on: d, eventTime: eventTime)
@@ -204,13 +204,13 @@ final class WorkspaceManager {
     /// stacking order, on top of the windows already there. The screen stays where it is.
     func sendAll(to n: Int, from display: Display, eventTime: Double) {
         let cur = state.activeWorkspace(display.uuid)
-        let ids = visibleWindows(on: display).filter { engine.windows[$0] != nil }
+        let ids = leaving(display).filter { engine.windows[$0] != nil }
         guard n != cur, !ids.isEmpty else { hud.flash(on: display, state: state, from: nil, target: nil); return }
         lastSwitch = PerformanceMonitor.now()
         state.makeRoom(ids.count, onTopOf: n, on: display.uuid)
         for (z, id) in ids.enumerated() {
             guard let w = engine.windows[id] else { continue }
-            state.hidden[String(id)] = entry(for: w.frame, ws: n, display: display, z: z + 1)
+            state.hidden[String(id)] = entry(for: moves.restoreTarget(id) ?? w.frame, ws: n, display: display, z: z + 1)
         }
         run(parks: ids, home: display, restores: []) { [weak self] in
             guard let self else { return }
@@ -340,6 +340,7 @@ final class WorkspaceManager {
         for (pid, work) in byApp {
             guard let app = engine.apps[pid] else {
                 for (id, _) in work.parks { results.add(id, .notMoved) }    // app gone: nothing parked
+                for (id, _) in work.restores { results.restoreDone(id) }
                 continue
             }
             let isFocusApp = pid == focusPID
@@ -347,6 +348,7 @@ final class WorkspaceManager {
                 var hung = false
                 // Restores first: they're what the user is waiting to see.
                 for (id, frame) in work.restores {
+                    defer { results.restoreDone(id) }
                     if hung { results.failedRestore(id); continue }
                     let t = PerformanceMonitor.now()
                     guard let win = app.element(for: id), let current = AX.frame(win) else {
@@ -370,17 +372,27 @@ final class WorkspaceManager {
             }
         }
 
-        for (id, _) in byApp.values.flatMap(\.parks) { parksInFlight.insert(id) }
+        for (id, _) in byApp.values.flatMap(\.parks) { moves.parkStarted(id) }
+        for (id, frame) in byApp.values.flatMap(\.restores) { moves.restoreStarted(id, to: frame) }
         var finished = false
         let finish: @MainActor (_ final: Bool) -> Void = { [weak self] final in
             guard let self else { return }
             for (id, outcome) in results.takeAll() {
                 let key = String(id)
-                self.parksInFlight.remove(id)
+                self.moves.parkFinished(id)
                 switch outcome {
                 case let .at(spot): self.state.hidden[key]?.px = spot.x; self.state.hidden[key]?.py = spot.y
                 case .movedUnread: break     // it did move: stays parked; the spot is learned from its next frame
                 case .notMoved: self.state.hidden.removeValue(forKey: key)
+                }
+            }
+            // The engine reads the restored frame a moment after the move (frame reads are
+            // throttled to 50 ms): until then the window still looks parked to it, so its
+            // destination stays known a little longer.
+            let restoredNow = results.takeDoneRestores()
+            if !restoredNow.isEmpty {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                    MainActor.assumeIsolated { for id in restoredNow { self?.moves.restoreFinished(id) } }
                 }
             }
             for id in results.takeFailedRestores() {
@@ -426,8 +438,8 @@ final class WorkspaceManager {
         return outcome
     }
 
-    /// Windows whose park move hasn't reported back yet.
-    private var parksInFlight = Set<CGWindowID>()
+    /// Parks and restores started but not finished (fast ⌥ N presses overlap them).
+    private var moves = MovesInFlight()
 
     // MARK: Helpers
 
@@ -435,6 +447,15 @@ final class WorkspaceManager {
         let v = display.visibleFrame
         return ParkedWindow(ws: ws, scr: display.uuid, x: frame.minX - v.minX, y: frame.minY - v.minY,
                             w: frame.width, h: frame.height, z: z)
+    }
+
+    /// Windows leaving `display` when it changes workspace: those showing there and those still
+    /// being restored there by the previous switch (see `WorkspaceSwitch.leaving`).
+    private func leaving(_ display: Display) -> [CGWindowID] {
+        let screens = displays.displays
+        return WorkspaceSwitch.leaving(visible: visibleWindows(on: display), restoring: moves.restoring,
+                                       isParked: { self.state.isParked($0) },
+                                       displayOf: { Geometry.display(for: $0, in: screens)?.id }, display: display.id)
     }
 
     /// Windows showing on `display`, top-most first. Pass `zOrder` when asking for several
@@ -517,6 +538,10 @@ private final class ParkResults: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [(CGWindowID, ParkOutcome)] = []
     private var failed: [CGWindowID] = []
+    private var restored: [CGWindowID] = []
+    /// A restore was attempted (moved or failed): it's no longer in flight.
+    func restoreDone(_ id: CGWindowID) { lock.lock(); restored.append(id); lock.unlock() }
+    func takeDoneRestores() -> [CGWindowID] { lock.lock(); defer { restored.removeAll(); lock.unlock() }; return restored }
     func add(_ id: CGWindowID, _ o: ParkOutcome) { lock.lock(); items.append((id, o)); lock.unlock() }
     func failedRestore(_ id: CGWindowID) { lock.lock(); failed.append(id); lock.unlock() }
     /// Results so far, each handed out once (the deadline and the final pass both read them).

@@ -766,8 +766,7 @@ private final class OverviewView: NSView {
 
     /// Height of what a card draws: header, rows and the "+N more" line (at most the card).
     static func contentHeight(_ card: OverviewContent.CardContent, layout: OverviewModel.Layout) -> CGFloat {
-        let rows = layout.rowsTop + CGFloat(card.rows.count) * layout.rowHeight + (card.more > 0 ? 40 : 4)
-        return min(card.frame.height, max(layout.rowsTop, rows).rounded(.up))
+        OverviewModel.contentHeight(rows: card.rows.count, more: card.more, cardHeight: card.frame.height, layout: layout)
     }
 
     /// What a card image depends on.

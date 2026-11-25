@@ -113,14 +113,10 @@ final class AutoFocusManager {
     /// and skipping it then left the previous window "most recent", so the next quick ⌘Tab
     /// went to the wrong window.
     private func record(_ id: CGWindowID, picked: Bool = false) {
-        guard let w = engine.windows[id] else { return }
-        let screens = displays.displays
-        if let d = Geometry.display(for: w.frame, in: screens),
-           FocusLogic.visibleFraction(w.frame, on: d.frame) >= FocusLogic.minVisibleFraction {
-            history.record(window: id, display: d.id)
-        } else if picked, let home = parkedDisplay?(id), screens.contains(where: { $0.id == home }) {
-            history.record(window: id, display: home)
-        }
+        guard let w = engine.windows[id],
+              let d = FocusLogic.mruDisplay(frame: w.frame, displays: displays.displays, picked: picked,
+                                            parkedHome: picked ? parkedDisplay?(id) : nil) else { return }
+        history.record(window: id, display: d)
     }
 
     // MARK: Cross-screen

@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import Carbon.HIToolbox
+import MonarchCore
 
 /// What the Dock is showing, as the Dock itself reports it through Accessibility.
 ///
@@ -29,7 +30,7 @@ final class DockState {
     private var pendingVerify: DispatchWorkItem?
     /// Set once the keyboard-shortcut fallback worked where the Dock's own trigger didn't:
     /// from then on the shortcut is sent directly, with no wait for the trigger to fail.
-    private var useShortcut = false
+    private var trigger = AppExposeTrigger()
 
     private static let notes = ["AXExposeShowFrontWindows", "AXExposeShowAllWindows", "AXExposeShowDesktop", "AXExposeExit"]
 
@@ -152,7 +153,7 @@ final class DockState {
     /// window managers use). Fallback, only if the Dock didn't react: the user's App Exposé
     /// keyboard shortcut, and only if one is enabled in System Settings.
     private func toggleAppExpose(expect: Mode, log: @escaping (String) -> Void) -> Bool {
-        if useShortcut, Self.postShortcut() { verifyLater(expect, log: log, fallback: false); return true }
+        if trigger.route == .shortcut, Self.postShortcut() { verifyLater(expect, log: log, fallback: false); return true }
         let sent = Dock.send("com.apple.expose.front.awake")
         if !sent && !Self.postShortcut() { log("App Exposé: no way to reach the Dock"); return false }
         verifyLater(expect, log: log, fallback: sent)
@@ -176,17 +177,17 @@ final class DockState {
                     guard let self else { return }
                     self.resync()
                     if self.state == .confirmed(expect) {
-                        self.useShortcut = true
+                        self.trigger.fallbackWorked()
                         log("App Exposé shortcut works: using it directly from now on")
                     }
                 }
             } else {
-                if self.useShortcut { self.useShortcut = false }     // stopped working: try the Dock again next time
+                if self.trigger.route == .shortcut { self.trigger.shortcutFailed() }   // try the Dock again next time
                 log("Dock didn't react (state \(self.describe))")
             }
         }
         pendingVerify = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + AppExposeTrigger.verifyDelay, execute: work)
     }
 
     /// Posts the App Exposé shortcut if the user has it enabled (symbolic hotkey 33,

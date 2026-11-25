@@ -8,7 +8,7 @@ import MonarchCore
 final class WindowEngine {
     private(set) var apps: [pid_t: TrackedApp] = [:]
     private(set) var windows: [CGWindowID: ManagedWindow] = [:]
-    private(set) var focusedWindow: [pid_t: CGWindowID] = [:]
+    private(set) var focusedWindow = FocusedWindows()
     private(set) var isRunning = false
     /// The frontmost app, and apps that are hidden (⌘H): both from NSWorkspace notifications.
     private(set) var frontmostPID: pid_t = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
@@ -143,7 +143,7 @@ final class WindowEngine {
         // history and snap state of those windows are dropped too.
         let gone = windows.values.filter { $0.pid == pid }.map(\.id)
         for id in gone { windows.removeValue(forKey: id) }
-        focusedWindow.removeValue(forKey: pid)
+        focusedWindow.appQuit(pid)
         hiddenPIDs.remove(pid)
         for id in gone { removeListeners.forEach { $0(id) } }
     }
@@ -160,12 +160,12 @@ final class WindowEngine {
         case let .removed(pid, id):
             windows.removeValue(forKey: id)
             // A closed window is no longer its app's focused window (it may have been the last one).
-            if focusedWindow[pid] == id { focusedWindow.removeValue(forKey: pid) }
+            focusedWindow.windowClosed(id, of: pid)
             if pendingFocus?.id == id { pendingFocus = nil }
             removeListeners.forEach { $0(id) }
         case let .focused(pid, id):
             guard apps[pid] != nil else { return }
-            focusedWindow[pid] = id
+            focusedWindow.set(pid, id)
             if let p = pendingFocus, p.id == id { pendingFocus = nil }      // confirmed
             if pid == frontmostPID, let id { focusListeners.forEach { $0(id) } }
         }

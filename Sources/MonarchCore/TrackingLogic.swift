@@ -1,0 +1,177 @@
+import CoreGraphics
+
+// Decisions behind past bugs, kept here (not in the app target) so MonarchChecks can pin
+// them down. The app calls these; the checks replay the situations that once went wrong.
+
+extension FocusLogic {
+    /// The display a focused window is recorded on in the recent-windows list (⌘Tab order),
+    /// or nil to leave it out.
+    ///
+    /// - Visible on a display: that display.
+    /// - Off screen (parked on a hidden workspace): left out, because macOS focuses such
+    ///   windows in passing during workspace switches; unless Monarch is picking it itself
+    ///   (`picked`), then it counts on its home display. Leaving a picked window out made the
+    ///   next quick ⌘Tab go to the wrong window after any ⌘Tab across workspaces.
+    public static func mruDisplay(frame: CGRect, displays: [Display], picked: Bool, parkedHome: UInt32?) -> UInt32? {
+        if let d = Geometry.display(for: frame, in: displays), visibleFraction(frame, on: d.frame) >= minVisibleFraction {
+            return d.id
+        }
+        guard picked, let home = parkedHome, displays.contains(where: { $0.id == home }) else { return nil }
+        return home
+    }
+}
+
+/// Which tracked windows the engine has been told about.
+///
+/// A window can be tracked by its app (subscribed to) before the engine knows it: its first
+/// read timed out, or the focus handler adopted it before the window-created retry. Such a
+/// window must be announced by whichever read succeeds next, or it stays missing from ⌘Tab
+/// and the overview.
+public struct WindowAnnouncements: Sendable {
+    public private(set) var announced = Set<UInt32>()
+    public init() {}
+
+    public func needsAnnouncing(_ id: UInt32) -> Bool { !announced.contains(id) }
+    public mutating func announced(_ id: UInt32) { announced.insert(id) }
+    /// The window was destroyed. True if the engine knew it (so it must hear of the removal).
+    public mutating func destroyed(_ id: UInt32) -> Bool { announced.remove(id) != nil }
+}
+
+/// Each app's focused window, as the engine keeps it.
+public struct FocusedWindows: Sendable {
+    public private(set) var byPID: [Int32: UInt32] = [:]
+    public init() {}
+
+    public subscript(pid: Int32) -> UInt32? { byPID[pid] }
+    public mutating func set(_ pid: Int32, _ id: UInt32?) { byPID[pid] = id }
+    public mutating func appQuit(_ pid: Int32) { byPID.removeValue(forKey: pid) }
+    /// A closed window is no longer its app's focused window (it may have been the last one:
+    /// keeping it made actions on "the focused window" target a window that doesn't exist).
+    public mutating func windowClosed(_ id: UInt32, of pid: Int32) {
+        if byPID[pid] == id { byPID.removeValue(forKey: pid) }
+    }
+    public mutating func removeAll() { byPID.removeAll() }
+}
+
+/// ⌃⌘F: fill the screen, press again to restore.
+public enum FillToggle {
+    public enum Step: Equatable, Sendable {
+        /// Go back to this frame.
+        case restore(CGRect)
+        /// Fill the area, after saving the current frame to come back to.
+        case fill
+        /// Already filling it and nothing saved: nothing to do (saving the full frame now
+        /// would make the toggle never restore).
+        case nothing
+    }
+
+    public static func step(current: CGRect, area: CGRect, saved: CGRect?) -> Step {
+        guard Geometry.nearlyEqual(current, area, tolerance: 4) else { return .fill }
+        return saved.map { .restore($0) } ?? .nothing
+    }
+}
+
+/// How App Exposé is triggered: the Dock's own notification, or, once that has been seen
+/// not to work and the user's keyboard shortcut did, the shortcut directly.
+public struct AppExposeTrigger: Sendable {
+    public enum Route: Equatable, Sendable { case dock, shortcut }
+    /// How long to wait before checking the Dock reacted. Shorter checks fired the fallback
+    /// while a slow Dock was still opening App Exposé, which closed it again.
+    public static let verifyDelay = 0.5
+
+    public private(set) var route = Route.dock
+    public init() {}
+
+    /// The Dock didn't react and the shortcut fallback did: use the shortcut from now on.
+    public mutating func fallbackWorked() { route = .shortcut }
+    /// The shortcut, sent directly, didn't work either: go back to trying the Dock first.
+    public mutating func shortcutFailed() { route = .dock }
+
+    /// The Dock's AX tree is read on the main thread at swipe start only when its state isn't
+    /// known: its notifications keep a known state current, and a busy Dock stalls the read.
+    public static func needsDockRead(stateKnown: Bool, watching: Bool) -> Bool { !stateKnown || !watching }
+}
+
+/// Retries for apps that don't answer while launching.
+public enum DiscoveryRetry {
+    public static let maxAttempts = 4
+    /// Delay before retry number `attempt + 1`, or nil when out of retries.
+    public static func delay(after attempt: Int) -> Double? {
+        attempt < maxAttempts ? 0.25 * Double(1 << attempt) : nil
+    }
+
+    /// Re-setting up an app that refused at launch, at most once per `interval` seconds
+    /// (it used to rerun on every activation).
+    public struct Limiter: Sendable {
+        public static let interval = 10.0
+        private var last = -Double.infinity
+        public init() {}
+        public mutating func allow(now: Double) -> Bool {
+            guard now - last >= Self.interval else { return false }
+            last = now
+            return true
+        }
+    }
+}
+
+extension OverviewModel {
+    /// Height of what a card draws (header, rows, "+N more"), at most the card. Card bitmaps
+    /// are this tall, not the whole card, so tall cards don't cost tall bitmaps.
+    public static func contentHeight(rows: Int, more: Int, cardHeight: CGFloat, layout: Layout) -> CGFloat {
+        let h = layout.rowsTop + CGFloat(rows) * layout.rowHeight + (more > 0 ? 40 : 4)
+        return min(cardHeight, max(layout.rowsTop, h).rounded(.up))
+    }
+}
+
+/// Window moves a workspace operation has started but not finished (they run on the apps'
+/// queues). Fast ⌥ N presses start a new switch while the previous one is still moving windows.
+///
+/// - Counted, not a set: one window can be parked, restored and parked again by three quick
+///   switches. A set forgot it was still parking as soon as the first park finished, and the
+///   window's frame from the restore in between then looked like "moved back by hand", so it
+///   was dropped from its workspace.
+/// - Restores remember where the window is going: until the move is read back, the engine
+///   still has the parked frame, so a window being restored is neither parked nor visible.
+public struct MovesInFlight: Sendable {
+    private var parks: [UInt32: Int] = [:]
+    private var restores: [UInt32: (count: Int, target: CGRect)] = [:]
+    public init() {}
+
+    public mutating func parkStarted(_ id: UInt32) { parks[id, default: 0] += 1 }
+    public mutating func parkFinished(_ id: UInt32) {
+        guard let n = parks[id] else { return }
+        parks[id] = n > 1 ? n - 1 : nil
+    }
+    public func isParking(_ id: UInt32) -> Bool { parks[id] != nil }
+
+    public mutating func restoreStarted(_ id: UInt32, to target: CGRect) {
+        restores[id] = ((restores[id]?.count ?? 0) + 1, target)
+    }
+    public mutating func restoreFinished(_ id: UInt32) {
+        guard let r = restores[id] else { return }
+        restores[id] = r.count > 1 ? (r.count - 1, r.target) : nil
+    }
+    /// Where a window being restored is going (nil when no restore is in flight).
+    public func restoreTarget(_ id: UInt32) -> CGRect? { restores[id]?.target }
+    public var restoring: [UInt32: CGRect] { restores.mapValues(\.target) }
+}
+
+public enum WorkspaceSwitch {
+    /// The windows leaving a display when it switches workspace, top-most first: the windows
+    /// showing there, plus those still on their way there from the previous switch (their
+    /// restore hasn't been read back yet). Without the latter, a quick second ⌥ N left them
+    /// out, and they landed on the new workspace when their restore finished.
+    ///
+    /// - `visible`: windows the engine sees on the display, top-most first.
+    /// - `restoring`: windows being restored and their target frames.
+    /// - `displayOf`: which display a frame is on.
+    public static func leaving(visible: [UInt32], restoring: [UInt32: CGRect], isParked: (UInt32) -> Bool,
+                               displayOf: (CGRect) -> UInt32?, display: UInt32) -> [UInt32] {
+        let shown = Set(visible)
+        // Restored last = top-most, so they go first; id order keeps it deterministic.
+        let incoming = restoring.filter { id, target in
+            !shown.contains(id) && !isParked(id) && displayOf(target) == display
+        }.keys.sorted()
+        return incoming + visible
+    }
+}

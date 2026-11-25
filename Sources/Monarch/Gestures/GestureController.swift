@@ -139,7 +139,7 @@ final class GestureController {
         let up = s.displacement > 0
         // The Dock's notifications keep its state current; read its AX tree (a main-thread call
         // that a busy Dock can stall) only when the state isn't known.
-        if dock.state == .unknown || !dock.isWatching { dock.resync() }
+        if AppExposeTrigger.needsDockRead(stateKnown: dock.state != .unknown, watching: dock.isWatching) { dock.resync() }
         if dock.isAppExposeOpen {
             interactive = .appExposeClose(sign: up ? 1 : -1)          // ↑, or ↓ again, dismisses it
         } else if dock.isBusy {

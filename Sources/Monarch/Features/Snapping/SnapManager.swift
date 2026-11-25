@@ -139,14 +139,16 @@ final class SnapManager {
             }
             return false
         }
-        if Geometry.nearlyEqual(current, area, tolerance: 4) {
-            // Filled: restore. Filled with nothing saved (it was already that big): nothing to
-            // go back to, and saving the full frame now would make the toggle never restore.
-            guard let before = history.takeBeforeFill(id) else { beep(); return false }
+        switch FillToggle.step(current: current, area: area, saved: history.peekBeforeFill(id)) {
+        case let .restore(before):
+            _ = history.takeBeforeFill(id)
             return WindowMover.apply(before, to: win, app: app.element, current: current)
+        case .nothing:
+            beep(); return false
+        case .fill:
+            history.saveBeforeFill(id, current)
+            return WindowMover.apply(area, to: win, app: app.element, current: current)
         }
-        history.saveBeforeFill(id, current)
-        return WindowMover.apply(area, to: win, app: app.element, current: current)
     }
 }
 

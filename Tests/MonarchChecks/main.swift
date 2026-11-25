@@ -683,5 +683,33 @@ run("ConfigValidationTests.testBadShortcutUnknownActionAndDuplicates") { ConfigV
 run("ConfigValidationTests.testEmptyBindingDisablesWithoutError") { ConfigValidationTests().testEmptyBindingDisablesWithoutError() }
 run("ConfigValidationTests.testRanges") { ConfigValidationTests().testRanges() }
 run("ConfigValidationTests.testDecodedFileWithMistakes") { try ConfigValidationTests().testDecodedFileWithMistakes() }
+run("SwitcherAcrossWorkspacesTests.testQuickTapReturnsToPreviousWindowAfterCrossWorkspacePicks") { SwitcherAcrossWorkspacesTests().testQuickTapReturnsToPreviousWindowAfterCrossWorkspacePicks() }
+run("SwitcherAcrossWorkspacesTests.testTogglingBetweenTwoWindowsOnDifferentWorkspaces") { SwitcherAcrossWorkspacesTests().testTogglingBetweenTwoWindowsOnDifferentWorkspaces() }
+run("SwitcherAcrossWorkspacesTests.testParkedWindowsFocusedInPassingAreNotRecent") { SwitcherAcrossWorkspacesTests().testParkedWindowsFocusedInPassingAreNotRecent() }
+run("WindowAnnouncementTests.testFailedFirstReadIsAnnouncedLater") { WindowAnnouncementTests().testFailedFirstReadIsAnnouncedLater() }
+run("WindowAnnouncementTests.testFocusBeforeRetryStillAnnouncesOnce") { WindowAnnouncementTests().testFocusBeforeRetryStillAnnouncesOnce() }
+run("WindowAnnouncementTests.testRemovalOnlyForAnnouncedWindows") { WindowAnnouncementTests().testRemovalOnlyForAnnouncedWindows() }
+run("FocusedWindowsTests.testClosingTheFocusedWindowClearsIt") { FocusedWindowsTests().testClosingTheFocusedWindowClearsIt() }
+run("FocusedWindowsTests.testClosingAnotherWindowKeepsFocus") { FocusedWindowsTests().testClosingAnotherWindowKeepsFocus() }
+run("FocusedWindowsTests.testSetNilAndQuit") { FocusedWindowsTests().testSetNilAndQuit() }
+run("FillToggleTests.testFillThenRestore") { FillToggleTests().testFillThenRestore() }
+run("FillToggleTests.testAlreadyFilledWithNothingSavedDoesNothing") { FillToggleTests().testAlreadyFilledWithNothingSavedDoesNothing() }
+run("FillToggleTests.testNotFilledIgnoresStaleSavedFrame") { FillToggleTests().testNotFilledIgnoresStaleSavedFrame() }
+run("UndoRemovedTests.testNoUndoActionOrShortcut") { UndoRemovedTests().testNoUndoActionOrShortcut() }
+run("UndoRemovedTests.testOldConfigWithUndoIsReported") { UndoRemovedTests().testOldConfigWithUndoIsReported() }
+run("UndoRemovedTests.testHelpSheetHasNoUndoRow") { UndoRemovedTests().testHelpSheetHasNoUndoRow() }
+run("AppExposeTriggerTests.testVerifyWaitIsLongEnoughForASlowDock") { AppExposeTriggerTests().testVerifyWaitIsLongEnoughForASlowDock() }
+run("AppExposeTriggerTests.testFallbackIsRememberedAndForgotten") { AppExposeTriggerTests().testFallbackIsRememberedAndForgotten() }
+run("AppExposeTriggerTests.testDockIsReadOnlyWhenItsStateIsUnknown") { AppExposeTriggerTests().testDockIsReadOnlyWhenItsStateIsUnknown() }
+run("DiscoveryRetryTests.testBackoffThenGiveUp") { DiscoveryRetryTests().testBackoffThenGiveUp() }
+run("DiscoveryRetryTests.testResubscribeAtMostEveryTenSeconds") { DiscoveryRetryTests().testResubscribeAtMostEveryTenSeconds() }
+run("CardBitmapTests.testBitmapCoversOnlyDrawnRows") { CardBitmapTests().testBitmapCoversOnlyDrawnRows() }
+run("CardBitmapTests.testNeverTallerThanTheCard") { CardBitmapTests().testNeverTallerThanTheCard() }
+run("FastWorkspaceSwitchTests.testSecondSwitchBeforeTheFirstLandsKeepsWindowsOnTheirWorkspaces") { FastWorkspaceSwitchTests().testSecondSwitchBeforeTheFirstLandsKeepsWindowsOnTheirWorkspaces() }
+run("FastWorkspaceSwitchTests.testRapidRoundTrip") { FastWorkspaceSwitchTests().testRapidRoundTrip() }
+run("FastWorkspaceSwitchTests.testSlowSwitchesStillWork") { FastWorkspaceSwitchTests().testSlowSwitchesStillWork() }
+run("FastWorkspaceSwitchTests.testParkCountsSurviveOverlap") { FastWorkspaceSwitchTests().testParkCountsSurviveOverlap() }
+run("FastWorkspaceSwitchTests.testRestoreTargetIsTheNewest") { FastWorkspaceSwitchTests().testRestoreTargetIsTheNewest() }
+run("FastWorkspaceSwitchTests.testLeavingSkipsParkedAndOtherDisplays") { FastWorkspaceSwitchTests().testLeavingSkipsParkedAndOtherDisplays() }
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)
