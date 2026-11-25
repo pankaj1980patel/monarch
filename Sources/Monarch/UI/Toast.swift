@@ -26,8 +26,7 @@ final class Toast {
         label.frame.origin = NSPoint(x: 22, y: 12)
         generation += 1
         let gen = generation
-        panel.alphaValue = 1
-        panel.orderFrontRegardless()
+        panel.showOpaque()
 
         hideWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -70,5 +69,19 @@ final class Toast {
         label = l
         panel = p
         return p
+    }
+}
+
+extension NSWindow {
+    /// Shows the window fully opaque, also when a fade-out is still running: setting
+    /// `alphaValue` directly doesn't stop an `animator()` fade, which would carry on to 0 and
+    /// leave the window up but invisible. A zero-length animation replaces the running one.
+    func showOpaque() {
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0
+            animator().alphaValue = 1
+        }
+        alphaValue = 1
+        orderFrontRegardless()
     }
 }

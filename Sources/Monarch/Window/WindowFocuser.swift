@@ -10,7 +10,10 @@ import Synchronization
 /// "both screens come forward" bug from the Hammerspoon days.
 ///
 /// The private symbols are looked up at runtime. If a macOS update removes them, focusing
-/// falls back to plain activation + AXRaise instead of crashing.
+/// falls back to public calls instead of crashing: Monarch yields activation to the app and
+/// activates it (macOS 14+ activation is cooperative: a plain activate() from a background
+/// app can be ignored), and through Accessibility makes the window main, the app frontmost,
+/// and raises the window.
 enum WindowFocuser {
     private typealias GetPSN = @convention(c) (pid_t, UnsafeMutablePointer<ProcessSerialNumber>) -> OSStatus
     private typealias SetFront = @convention(c) (UnsafeMutablePointer<ProcessSerialNumber>, UInt32, UInt32) -> Int32
@@ -52,19 +55,24 @@ enum WindowFocuser {
         let pid = app.pid
         focusQueue.async {
             guard generation.load(ordering: .relaxed) == gen else { return }
-            var raised = false
-            if let s = symbols {
+            let raised: Bool = {
+                guard let s = symbols else { return false }
                 var psn = ProcessSerialNumber()
-                if s.getPSN(pid, &psn) == noErr {
-                    _ = s.setFront(&psn, id, 0x200)          // kCPSUserGenerated
-                    makeKeyWindow(&psn, id, s.post)
-                    raised = true
-                    perf.record(metric, since: start)
-                }
-            }
+                guard s.getPSN(pid, &psn) == noErr else { return false }
+                _ = s.setFront(&psn, id, 0x200)          // kCPSUserGenerated
+                makeKeyWindow(&psn, id, s.post)
+                perf.record(metric, since: start)
+                return true
+            }()
             if !raised { activateFallback(pid) }
             app.queue.async {
                 guard generation.load(ordering: .relaxed) == gen, let win = app.element(for: id) else { return }
+                if !raised {
+                    // Public path: this window becomes the app's main one, then the app comes
+                    // to the front with it (only that window, not all of the app's windows).
+                    AXUIElementSetAttributeValue(win, kAXMainAttribute as CFString, kCFBooleanTrue)
+                    AXUIElementSetAttributeValue(app.element, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+                }
                 AXUIElementPerformAction(win, kAXRaiseAction as CFString)
                 if !raised { perf.record(metric, since: start) }
             }
@@ -86,6 +94,10 @@ enum WindowFocuser {
     }
 
     private static func activateFallback(_ pid: pid_t) {
-        DispatchQueue.main.async { NSRunningApplication(processIdentifier: pid)?.activate() }
+        DispatchQueue.main.async {
+            guard let target = NSRunningApplication(processIdentifier: pid) else { return }
+            NSApp.yieldActivation(to: target)            // lets the request below be honoured
+            target.activate()
+        }
     }
 }

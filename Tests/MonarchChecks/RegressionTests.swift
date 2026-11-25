@@ -1070,7 +1070,7 @@ struct ActionRegressionTests {
         func soft(_ c: @autoclosure () -> Bool, line: Int = #line) { if !c() { ok = false; print("  soft check failed at line \(line)") } }
         let spots: [(Action, String)] = [
             (.snapLeft, "snap.left"), (.snapRight, "snap.right"), (.snapTop, "snap.top"), (.snapBottom, "snap.bottom"),
-            (.maximize, "snap.maximize"), (.center, "snap.center"), (.topLeft, "snap.topLeft"), (.undo, "snap.undo"),
+            (.maximize, "snap.maximize"), (.center, "snap.center"), (.topLeft, "snap.topLeft"),
             (.leftTwoThirds, "snap.leftTwoThirds"), (.rightTwoThirds, "snap.rightTwoThirds"),
             (.moveScreenWest, "screen.moveWest"), (.moveScreenEast, "screen.moveEast"),
             (.moveScreenNextMaximize, "screen.moveNextMaximize"), (.fillToggle, "window.fillToggle"),
@@ -1175,7 +1175,7 @@ struct ActionRegressionTests {
             soft(key == "right" && rects.count == 3 && rects[0] == UnitRect(0.5, 0, 0.5, 1))
         } else { soft(false) }
         soft(SnapLayouts.plan(for: .maximize) == .unit(UnitRect(0, 0, 1, 1)))
-        soft(SnapLayouts.plan(for: .undo) == nil && SnapLayouts.plan(for: .fillToggle) == nil)
+        soft(SnapLayouts.plan(for: .fillToggle) == nil)
         // Every rect lies within the unit square.
         for a in snap {
             var rects: [UnitRect] = []
@@ -1324,60 +1324,46 @@ struct HistoryRegressionTests {
 
     func testForgetResetsCycleForReusedID() {
         let h = WindowHistory()
-        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f1, now: 0) == 0)
-        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f1, now: 0.5) == 1)
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, now: 0) == 0)
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, now: 0.5) == 1)
         h.forget(1)                                   // closed; a new window reuses ID 1
-        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f2, now: 0.8) == 0)
-        expect(h.swapForUndo(1, current: f3) == f2)   // undo goes to the new window's frame
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, now: 0.8) == 0)
         // Forgetting another window leaves the cycle alone.
-        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f2, now: 1.0) == 1)
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, now: 1.0) == 1)
         h.forget(2)
-        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f2, now: 1.2) == 2)
-    }
-
-    func testRememberOverwritesAndWindowsAreIndependent() {
-        let h = WindowHistory()
-        expect(h.swapForUndo(1, current: f1) == nil)
-        h.remember(1, f1); h.remember(1, f2); h.remember(2, f3)
-        expect(h.swapForUndo(1, current: f3) == f2)
-        expect(h.swapForUndo(2, current: f1) == f3)
-        expect(h.swapForUndo(1, current: f1) == f3)             // second undo of window 1 redoes
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, now: 1.2) == 2)
     }
 
     func testCycleResetRules() {
         expect(WindowHistory.cycleWindow == 1.5)
         let h = WindowHistory()
-        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f1, now: 0) == 0)
-        // Exactly cycleWindow later: too late, restarts and saves the new current for undo.
-        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f2, now: 1.5) == 0)
-        expect(h.swapForUndo(1, current: f3) == f2)
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, now: 0) == 0)
+        // Exactly cycleWindow later: too late, restarts.
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, now: 1.5) == 0)
         // 1.49 s after the previous press: advances. The window is measured from the last press.
         let g = WindowHistory()
-        expect(g.nextCycleIndex(key: "left", window: 1, count: 3, current: f1, now: 0) == 0)
-        expect(g.nextCycleIndex(key: "left", window: 1, count: 3, current: f2, now: 1.49) == 1)
-        expect(g.nextCycleIndex(key: "left", window: 1, count: 3, current: f2, now: 2.9) == 2)
-        // Advancing does not overwrite the undo frame.
-        expect(g.swapForUndo(1, current: f3) == f1)
-        // Another window with the same key restarts at 0 and has its own undo frame.
+        expect(g.nextCycleIndex(key: "left", window: 1, count: 3, now: 0) == 0)
+        expect(g.nextCycleIndex(key: "left", window: 1, count: 3, now: 1.49) == 1)
+        expect(g.nextCycleIndex(key: "left", window: 1, count: 3, now: 2.9) == 2)
+        // Another window with the same key restarts at 0.
         let k = WindowHistory()
-        expect(k.nextCycleIndex(key: "left", window: 1, count: 3, current: f1, now: 0) == 0)
-        expect(k.nextCycleIndex(key: "left", window: 2, count: 3, current: f2, now: 0.1) == 0)
-        expect(k.swapForUndo(2, current: f3) == f2 && k.swapForUndo(1, current: f3) == f1)
+        expect(k.nextCycleIndex(key: "left", window: 1, count: 3, now: 0) == 0)
+        expect(k.nextCycleIndex(key: "left", window: 2, count: 3, now: 0.1) == 0)
         // After switching windows, going back to window 1 restarts too.
-        expect(k.nextCycleIndex(key: "left", window: 1, count: 3, current: f3, now: 0.2) == 0)
+        expect(k.nextCycleIndex(key: "left", window: 1, count: 3, now: 0.2) == 0)
         // A different key in between breaks the chain.
         let m = WindowHistory()
-        _ = m.nextCycleIndex(key: "left", window: 1, count: 3, current: f1, now: 0)
-        _ = m.nextCycleIndex(key: "right", window: 1, count: 3, current: f2, now: 0.1)
-        expect(m.nextCycleIndex(key: "left", window: 1, count: 3, current: f3, now: 0.2) == 0)
+        _ = m.nextCycleIndex(key: "left", window: 1, count: 3, now: 0)
+        _ = m.nextCycleIndex(key: "right", window: 1, count: 3, now: 0.1)
+        expect(m.nextCycleIndex(key: "left", window: 1, count: 3, now: 0.2) == 0)
         // Wrap with count 2 and count 1.
         let w = WindowHistory()
-        expect(w.nextCycleIndex(key: "a", window: 1, count: 2, current: f1, now: 0) == 0)
-        expect(w.nextCycleIndex(key: "a", window: 1, count: 2, current: f1, now: 0.1) == 1)
-        expect(w.nextCycleIndex(key: "a", window: 1, count: 2, current: f1, now: 0.2) == 0)
+        expect(w.nextCycleIndex(key: "a", window: 1, count: 2, now: 0) == 0)
+        expect(w.nextCycleIndex(key: "a", window: 1, count: 2, now: 0.1) == 1)
+        expect(w.nextCycleIndex(key: "a", window: 1, count: 2, now: 0.2) == 0)
         let one = WindowHistory()
-        _ = one.nextCycleIndex(key: "a", window: 1, count: 1, current: f1, now: 0)
-        expect(one.nextCycleIndex(key: "a", window: 1, count: 1, current: f1, now: 0.1) == 0)
+        _ = one.nextCycleIndex(key: "a", window: 1, count: 1, now: 0)
+        expect(one.nextCycleIndex(key: "a", window: 1, count: 1, now: 0.1) == 0)
     }
 
     func testFillSaveTakePeek() {
@@ -1388,25 +1374,18 @@ struct HistoryRegressionTests {
         expect(h.peekBeforeFill(1) == f2 && h.peekBeforeFill(1) == f2)   // peek does not consume
         h.saveBeforeFill(2, f3)
         expect(h.takeBeforeFill(1) == f2 && h.takeBeforeFill(1) == nil && h.peekBeforeFill(2) == f3)
-        // Fill and undo state are independent.
-        h.remember(2, f1)
-        expect(h.takeBeforeFill(2) == f3 && h.swapForUndo(2, current: f2) == f1)
+        expect(h.takeBeforeFill(2) == f3 && h.takeBeforeFill(2) == nil)
     }
 
     func testForgetClearsWindowOnly() {
         let h = WindowHistory()
-        h.remember(1, f1); h.saveBeforeFill(1, f2)
-        h.remember(2, f2); h.saveBeforeFill(2, f3)
+        h.saveBeforeFill(1, f2)
+        h.saveBeforeFill(2, f3)
         h.forget(1)
-        expect(h.swapForUndo(1, current: f3) == nil && h.peekBeforeFill(1) == nil && h.takeBeforeFill(1) == nil)
-        expect(h.swapForUndo(2, current: f1) == f2 && h.peekBeforeFill(2) == f3)
+        expect(h.peekBeforeFill(1) == nil && h.takeBeforeFill(1) == nil)
+        expect(h.peekBeforeFill(2) == f3)
         h.forget(99)                                            // unknown: no-op
         expect(h.peekBeforeFill(2) == f3)
-        // Undo frame saved by a cycle start is dropped too.
-        let c = WindowHistory()
-        _ = c.nextCycleIndex(key: "left", window: 5, count: 3, current: f1, now: 0)
-        c.forget(5)
-        expect(c.swapForUndo(5, current: f2) == nil)
     }
 }
 
@@ -1480,7 +1459,7 @@ struct HelpRegressionTests {
         let snap = s.first { $0.title == "Snap" }!
         expect(snap.rows.last == HelpSheet.Row(keys: "⌃⌥⌘ 1…9", text: "Tile top N windows (0 = all)"))
         expect(snap.rows.first == HelpSheet.Row(keys: "⌃⌥ ←", text: "Left ½ → ⅓ → ⅔ (repeat)"))
-        expect(snap.rows.count == 17)
+        expect(snap.rows.count == 16)
         expect(s.last?.rows.map(\.keys) == ["⌃⌥ /", "⌃⌥⇧ R", "⌃⌥⇧ G"])
     }
 
@@ -1561,5 +1540,51 @@ struct HelpRegressionTests {
         let real = HelpSheet.sections(bindings: defaults(), states: st, gestures: true)
         let rc = HelpSheet.columns(real)
         expect(!rc.left.isEmpty && !rc.right.isEmpty && rc.left.count + rc.right.count == real.count)
+    }
+}
+
+// MARK: - Config validation (⌃⌥⇧ R applies a file only if it's valid)
+
+struct ConfigValidationTests {
+    func testDefaultsAreValid() {
+        expect(AppConfiguration().validate().isEmpty)
+        var c = AppConfiguration(); c.gestures = GestureConfig()
+        expect(c.validate().isEmpty)
+    }
+
+    func testBadShortcutUnknownActionAndDuplicates() {
+        var c = AppConfiguration()
+        c.bindings["snap.left"] = "ctrl+alt+nonsense"
+        c.bindings["snap.undo"] = "ctrl+alt+delete"                  // removed action
+        c.bindings["snap.center"] = "ctrl+alt+right"                 // same as snap.right
+        let p = c.validate()
+        expect(p.contains { $0.hasPrefix("snap.left:") })
+        expect(p.contains("unknown action \"snap.undo\""))
+        expect(p.contains { $0.contains("snap.center and snap.right") })
+        expect(p.count == 3)
+    }
+
+    func testEmptyBindingDisablesWithoutError() {
+        var c = AppConfiguration()
+        c.bindings["snap.center"] = ""
+        expect(c.validate().isEmpty)
+    }
+
+    func testRanges() {
+        var c = AppConfiguration()
+        c.axTimeout = 0
+        var g = GestureConfig(); g.ratio = 0.5; g.threeFinger = 2
+        c.gestures = g
+        let p = c.validate()
+        expect(p.contains { $0.hasPrefix("axTimeout") })
+        expect(p.contains { $0.hasPrefix("gestures.ratio") } && p.contains { $0.hasPrefix("gestures.threeFinger") })
+        expect(p.count == 3)
+    }
+
+    func testDecodedFileWithMistakes() throws {
+        let json = #"{"bindings": {"workspace.1": "alt+1", "workspace.2": "alt+1", "bogus": "alt+x"}}"#
+        let c = try JSONDecoder().decode(AppConfiguration.self, from: Data(json.utf8))
+        let p = c.validate()
+        expect(p.contains("unknown action \"bogus\"") && p.contains { $0.contains("workspace.1 and workspace.2") })
     }
 }

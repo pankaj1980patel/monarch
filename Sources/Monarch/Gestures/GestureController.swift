@@ -8,7 +8,8 @@ import QuartzCore
 /// - three fingers ↑: the overview follows the fingers open, or closed if it's already open
 ///   (the same gesture dismisses it); closes App Exposé if the Dock reports it open
 /// - three fingers ↓: the overview follows the fingers closed if it's open; closes App Exposé
-///   if it's open (the same gesture dismisses it); otherwise opens App Exposé on lift
+///   if it's open (the same gesture dismisses it); otherwise opens App Exposé (as soon as the
+///   swipe reaches its distance with the `swipe` trigger, on lift with `lift`)
 ///
 /// Ownership: whatever macOS already did wins. If the Dock reports App Exposé or Mission
 /// Control open (or can't tell), Monarch doesn't open the overview; if macOS opens one of them
@@ -136,7 +137,9 @@ final class GestureController {
         interactive = .none
         guard s.fingers == 3, s.axis == .vertical else { return }
         let up = s.displacement > 0
-        dock.resync()                     // one AX read: the Dock's state is known before it's needed
+        // The Dock's notifications keep its state current; read its AX tree (a main-thread call
+        // that a busy Dock can stall) only when the state isn't known.
+        if dock.state == .unknown || !dock.isWatching { dock.resync() }
         if dock.isAppExposeOpen {
             interactive = .appExposeClose(sign: up ? 1 : -1)          // ↑, or ↓ again, dismisses it
         } else if dock.isBusy {

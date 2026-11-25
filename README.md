@@ -34,7 +34,7 @@ The build script signs with a local self-signed identity so the Accessibility gr
 
 ## Shortcuts
 
-Press ⌃⌥ / for the full sheet. Settings live in `~/Library/Application Support/Monarch/config.json` and reload on save.
+Press ⌃⌥ / for the full sheet. Settings live in `~/Library/Application Support/Monarch/config.json` and are applied with ⌃⌥⇧ R (or Reload Configuration in the menu) after a check: a file with mistakes is not applied, and the menu lists them.
 
 ## Design
 

@@ -1,7 +1,7 @@
 import AppKit
 import MonarchCore
 
-/// Snapping, undo, moving between screens and the fill toggle.
+/// Snapping, moving between screens and the fill toggle.
 ///
 /// The main thread only picks the frontmost app and copies the display list (microseconds);
 /// all Accessibility work then runs on that app's own queue in a single hop.
@@ -16,7 +16,7 @@ final class SnapManager {
         self.engine = engine
         self.displays = displays
         self.perf = perf
-        // Undo and fill frames are per window: drop them when the window closes.
+        // Cycle state and fill frames are per window: drop them when the window closes.
         let history = self.history
         engine.onRemove { id in history.forget(id) }
     }
@@ -77,13 +77,11 @@ final class SnapManager {
 
         // One hop per app, all apps in parallel; the group times the whole arrangement.
         let group = DispatchGroup()
-        let history = self.history
         for (pid, items) in byApp {
             guard let app = engine.apps[pid] else { continue }
             app.queue.async(group: group) { @Sendable in
                 for (id, frame) in items {
                     guard let win = app.element(for: id), let current = AX.frame(win) else { continue }
-                    history.remember(id, current)
                     WindowMover.apply(frame, to: win, app: app.element, current: current)
                 }
             }
@@ -102,14 +100,9 @@ final class SnapManager {
                                         history: WindowHistory) -> Bool {
         let area = display.visibleFrame
         switch action {
-        case .undo:
-            guard let saved = history.swapForUndo(id, current: current) else { beep(); return false }
-            return WindowMover.apply(saved, to: win, app: app.element, current: current)
-
         case .moveScreenWest, .moveScreenEast, .moveScreenNextMaximize:
             let dir: Geometry.Direction = action == .moveScreenWest ? .west : action == .moveScreenEast ? .east : .next
             guard let target = Geometry.neighbor(of: display, dir, in: screens) else { beep(); return false }
-            history.remember(id, current)
             let frame = action == .moveScreenNextMaximize
                 ? target.visibleFrame
                 : Geometry.map(current, from: area, to: target.visibleFrame)
@@ -123,12 +116,9 @@ final class SnapManager {
             let unit: UnitRect
             switch plan {
             case let .unit(u):
-                history.remember(id, current)
                 unit = u
             case let .cycle(key, rects):
-                let i = history.nextCycleIndex(key: key, window: id, count: rects.count,
-                                               current: current, now: PerformanceMonitor.now())
-                unit = rects[i]
+                unit = rects[history.nextCycleIndex(key: key, window: id, count: rects.count, now: PerformanceMonitor.now())]
             }
             return WindowMover.apply(Geometry.rect(for: unit, in: area), to: win, app: app.element, current: current)
         }
@@ -149,7 +139,10 @@ final class SnapManager {
             }
             return false
         }
-        if Geometry.nearlyEqual(current, area, tolerance: 4), let before = history.takeBeforeFill(id) {
+        if Geometry.nearlyEqual(current, area, tolerance: 4) {
+            // Filled: restore. Filled with nothing saved (it was already that big): nothing to
+            // go back to, and saving the full frame now would make the toggle never restore.
+            guard let before = history.takeBeforeFill(id) else { beep(); return false }
             return WindowMover.apply(before, to: win, app: app.element, current: current)
         }
         history.saveBeforeFill(id, current)
@@ -157,5 +150,5 @@ final class SnapManager {
     }
 }
 
-/// Audible "can't do that" (nothing to undo, no other screen). AppKit wants the main thread.
+/// Audible "can't do that" (no other screen, nothing to restore). AppKit wants the main thread.
 private func beep() { DispatchQueue.main.async { NSSound.beep() } }

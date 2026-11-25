@@ -35,6 +35,17 @@ enum AX {
         return arr
     }
 
+    /// Like `elements`, but nil when the app didn't answer (timeout, not ready), so "no
+    /// windows" can be told apart from "couldn't read the windows".
+    static func elementsIfReadable(_ el: AXUIElement, _ attr: String) -> [AXUIElement]? {
+        var v: CFTypeRef?
+        switch AXUIElementCopyAttributeValue(el, attr as CFString, &v) {
+        case .success: return (v as? [AXUIElement]) ?? []
+        case .noValue, .attributeUnsupported: return []
+        default: return nil
+        }
+    }
+
     static func string(_ el: AXUIElement, _ attr: String) -> String? {
         var v: CFTypeRef?
         guard AXUIElementCopyAttributeValue(el, attr as CFString, &v) == .success else { return nil }

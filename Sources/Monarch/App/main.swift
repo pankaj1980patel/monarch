@@ -15,6 +15,13 @@ if CommandLine.arguments.contains("--login-status") {
     print("old login item: \(names[SMAppService.mainApp.status.rawValue] ?? "?")")
     exit(0)
 }
+// `Monarch --check-config`: validates config.json the way ⌃⌥⇧ R does; exit 1 if it has problems.
+if CommandLine.arguments.contains("--check-config") {
+    let (c, err) = ConfigurationStore.load()
+    let problems = err.map { [$0] } ?? c.validate()
+    print(problems.isEmpty ? "config.json OK" : problems.map { "✕ " + $0 }.joined(separator: "\n"))
+    exit(problems.isEmpty ? 0 : 1)
+}
 // `Monarch --unregister-login`: removes the login agent (diagnostics / repair).
 if CommandLine.arguments.contains("--unregister-login") {
     do { try SMAppService.agent(plistName: monarchAgentLabel + ".plist").unregister(); print("unregistered") }

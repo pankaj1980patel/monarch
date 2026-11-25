@@ -1,5 +1,5 @@
+import AppKit
 import CoreGraphics
-import Foundation
 import MonarchCore
 
 /// Link to the parts of the Hammerspoon config that still run (fallback only, if Monarch stops).
@@ -34,9 +34,16 @@ final class HammerspoonBridge {
         ) { note in
             let text = note.object as? String ?? ""
             MainActor.assumeIsolated {
-                if let c = Self.parse(text) { self.onCommand?(c) }
+                // Distributed notifications carry no sender, so any app could post these. They're
+                // only meant for Hammerspoon's fallback config: ignore them unless it's running.
+                guard Self.hammerspoonRunning, let c = Self.parse(text) else { return }
+                self.onCommand?(c)
             }
         }
+    }
+
+    static var hammerspoonRunning: Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: domain as String).isEmpty
     }
 
     /// Hammerspoon's saved workspaces, for the one-time import on Monarch's first run.

@@ -5,8 +5,10 @@ import ApplicationServices
 /// Accessibility trust changes, so we wait for that instead of polling.
 @MainActor
 final class PermissionsManager {
+    /// Accessibility became allowed (first grant, or granted again after being turned off).
     var onGranted: (() -> Void)?
-    private var token: NSObjectProtocol?
+    /// Accessibility was turned off while running: every AX observer is dead from here on.
+    var onRevoked: (() -> Void)?
     private var changeToken: NSObjectProtocol?
     private var trusted = AXIsProcessTrusted()
 
@@ -18,7 +20,7 @@ final class PermissionsManager {
             forName: NSNotification.Name("com.apple.accessibility.api"), object: nil, queue: .main
         ) { _ in
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {     // the database updates just after
-                MainActor.assumeIsolated { self.trusted = AXIsProcessTrusted() }
+                MainActor.assumeIsolated { self.check() }
             }
         }
     }
@@ -26,33 +28,19 @@ final class PermissionsManager {
     /// Shows the system prompt (System Settings → Privacy & Security → Accessibility).
     func prompt() {
         _ = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
-        watch()
     }
 
     func openSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
             NSWorkspace.shared.open(url)
         }
-        watch()
     }
 
-    private func watch() {
-        guard token == nil else { return }
-        token = DistributedNotificationCenter.default().addObserver(
-            forName: NSNotification.Name("com.apple.accessibility.api"), object: nil, queue: .main
-        ) { _ in
-            // The trust database updates just after the notification.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                MainActor.assumeIsolated { self.check() }
-            }
-        }
-    }
-
+    /// Acts on changes only: granted → start, revoked → stop.
     private func check() {
+        let was = trusted
         trusted = AXIsProcessTrusted()
-        guard trusted else { return }
-        if let token { DistributedNotificationCenter.default().removeObserver(token) }
-        token = nil
-        onGranted?()
+        if trusted && !was { onGranted?() }
+        if !trusted && was { onRevoked?() }
     }
 }

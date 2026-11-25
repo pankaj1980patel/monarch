@@ -77,7 +77,7 @@
 ├── Sources/MonarchCore/          pure logic, no AppKit, unit-checked
 │   ├── Geometry.swift            AX/Cocoa conversion, unit rects, display lookup, mapping
 │   ├── Actions.swift             action list, default shortcuts, snap layouts
-│   ├── WindowHistory.swift       undo, cycle state, fill-toggle frames (Mutex)
+│   ├── WindowHistory.swift       cycle state, fill-toggle frames (Mutex)
 │   ├── Shortcut.swift            "ctrl+alt+left" → key code + modifiers
 │   ├── Configuration.swift       config.json model with defaults
 │   └── PerfStats.swift           fixed ring buffers, median / p95
@@ -88,7 +88,7 @@
 │   ├── Window/                   AX wrappers, TrackedApp (per-app queue + AXObserver), WindowMover
 │   ├── Display/                  DisplayManager (cached, change-notified)
 │   ├── Input/                    HotkeyManager (Carbon)
-│   ├── Features/Snapping/        SnapManager (snap, undo, screens, fill toggle)
+│   ├── Features/Snapping/        SnapManager (snap, screens, fill toggle)
 │   ├── Features/AutoFocus/       later: MouseTracker, ScreenFocusHistory
 │   ├── Features/Switcher/        later: MRU, prebuilt glass panel
 │   ├── Features/Workspaces/      later: parking, persistence, indicator
@@ -150,7 +150,6 @@
 <tr><td>U / I / J / K</td><td>Four quarters</td></tr>
 <tr><td>D / F / G</td><td>Three vertical sections</td></tr>
 <tr><td>E / T</td><td>Two-thirds layouts</td></tr>
-<tr><td>Delete</td><td>Undo previous frame</td></tr>
 </tbody></table>
 
 <h3>Screen management</h3>
@@ -158,7 +157,7 @@
 <tr><td>Control + Option + Command + ← / →</td><td>Move focused window to other screen</td></tr>
 <tr><td>Control + Option + N</td><td>Jump focus to other screen</td></tr>
 <tr><td>Control + Command + F</td><td>Fill screen without macOS full-screen mode; toggle to restore</td></tr>
-<tr><td>Control + Option + Command + 1–9 / 0 <span class="pill done">new</span></td><td>Arrange the top N windows of the screen under the mouse (its current workspace); 0 arranges all. Columns of ceil(√N); the front-most window gets the biggest slot (3 = big left + 2 stacked). Apps move in parallel; ⌃⌥ ⌫ undoes per window.</td></tr>
+<tr><td>Control + Option + Command + 1–9 / 0 <span class="pill done">new</span></td><td>Arrange the top N windows of the screen under the mouse (its current workspace); 0 arranges all. Columns of ceil(√N); the front-most window gets the biggest slot (3 = big left + 2 stacked). Apps move in parallel.</td></tr>
 </tbody></table>
 
 <h3>Auto focus</h3>
@@ -290,13 +289,13 @@
 <ol class="steps">
 <li><strong>Native application foundation</strong><span class="pill done">v0.1 built</span><br>Swift 6/AppKit, menu bar app, permission manager, hotkey registration, configuration persistence and login startup.</li>
 <li><strong>Window state engine</strong><span class="pill done">v0.1 built</span><br>AXObserver, window discovery, centralized cache, screen mapping, focus history and lifecycle cleanup.</li>
-<li><strong>Window management</strong><span class="pill done">v0.1 built</span><br>All snapping shortcuts, frame history/undo, screen movement and fill-screen toggle.</li>
+<li><strong>Window management</strong><span class="pill done">v0.1 built</span><br>All snapping shortcuts, screen movement and fill-screen toggle.</li>
 <li><strong>Auto focus</strong><span class="pill done">built</span><br>Cross-screen focus, same-app hover, last-used window tracking and iTerm multi-window regression test.</li>
 <li><strong>Application switcher</strong><span class="pill done">built</span><br>MRU manager, custom glass NSPanel, screen dots, workspace badges and keyboard/mouse navigation.</li>
 <li><strong>Workspace manager</strong><span class="pill done">built</span><br>Nine workspaces per display, parking, saved positions, persistence and indicator.</li>
 <li><strong>Custom overview</strong><span class="pill done">built</span><br>Workspace cards, window selection, drag-and-drop, cross-screen movement and keyboard navigation.</li>
 <li><strong>Global gestures</strong><span class="pill done">built</span><br>Private MultitouchSupport bridge, three/four-finger recognition, click suppression and OS compatibility tests. <em>Revised:</em> size_t callback ABI and per-record validation; Touch Bar excluded; locked direction recognizer with one action per gesture; Dock state confirmed via Accessibility (AXExposeShowFrontWindows / AXExposeShowAllWindows / AXExposeExit), so App Exposé is never toggled blind; an interactive overview that follows the fingers through an atomic value and a display link, then springs to open or closed; reset on sleep, wake and trackpad reconnect; native conflicts listed in the menu, settings never changed.</li>
-<li><strong>Performance and production</strong><span class="pill done">built</span><br>CPU/memory profiling, long-running stability, sleep/wake, display reconnect, crash recovery and Hammerspoon removal. <em>Step 9:</em> ⌃⌥ / help sheet built from the live bindings (two balanced columns, shrinks to fit the screen); ⌃⌥⇧ G gesture status; ⌃⌥⇧ R and saving config.json reload settings (a broken file keeps the current ones); the Hammerspoon layouts (⌃⌥ 1 / ⌃⌥ 2) were dropped at your request; a launch agent starts Monarch at login and restarts it after a crash (not after Quit); one instance at a time; SIGTERM quits cleanly. Hammerspoon removed (2026-11-25): quit, taken out of login items and moved to the Trash; ~/.hammerspoon and its .bak files are kept for rollback.</li>
+<li><strong>Performance and production</strong><span class="pill done">built</span><br>CPU/memory profiling, long-running stability, sleep/wake, display reconnect, crash recovery and Hammerspoon removal. <em>Step 9:</em> ⌃⌥ / help sheet built from the live bindings (two balanced columns, shrinks to fit the screen); ⌃⌥⇧ G gesture status; ⌃⌥⇧ R reloads config.json after validating it (a file with mistakes keeps the current settings; the file isn't watched); the Hammerspoon layouts (⌃⌥ 1 / ⌃⌥ 2) were dropped at your request; a launch agent starts Monarch at login and restarts it after a crash (not after Quit); one instance at a time; SIGTERM quits cleanly. Hammerspoon removed (2026-11-25): quit, taken out of login items and moved to the Trash; ~/.hammerspoon and its .bak files are kept for rollback.</li>
 </ol>
 
 <h2>10. Migration strategy</h2>
@@ -352,7 +351,6 @@
 <tr><td>All 16 snapping shortcuts, with ½ → ⅓ → ⅔ cycling</td><td>Built</td></tr>
 <tr><td>Move to other screen (⌃⌥⌘ ←/→), other screen + maximize (⌃⌥⌘ ↩)</td><td>Built</td></tr>
 <tr><td>Fill toggle (⌃⌘ F), including leaving macOS full screen</td><td>Built</td></tr>
-<tr><td>Undo / redo (⌃⌥ ⌫)</td><td>Built</td></tr>
 <tr><td>Performance menu: per-stage latency, median, p95, memory, CPU</td><td>Built</td></tr>
 <tr><td>Hammerspoon handoff</td><td>Built</td></tr>
 <tr><td>Unit checks (geometry, history, shortcuts, config, stats)</td><td>47 checks pass</td></tr>

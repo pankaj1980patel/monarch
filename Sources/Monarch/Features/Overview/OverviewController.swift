@@ -167,9 +167,12 @@ final class OverviewController {
     /// the windows and blur, so the first open costs what every open costs.
     func prewarm() {
         guard !isOpen, workspaces.isActive else { return }
+        didPrewarm = true
         rebuild(initialSelection: true)
         for s in screens { s.panel.prewarm() }
     }
+    /// After the launch prewarm, panels created for new displays are prewarmed too.
+    private var didPrewarm = false
 
     /// Hammerspoon's gesture code: fingers down / all lifted. With tap-to-click on, lifting
     /// three fingers after the swipe that opened the overview registers as a click.
@@ -204,8 +207,11 @@ final class OverviewController {
                                             visible: workspaces.visibleWindows(on: d, zOrder: z), parked: parked)
             let layout = OverviewModel.layout(cardCount: cards.count, size: d.frame.size)
             let shown = cards.map { $0.windows.count <= layout.maxRows ? $0.windows.count : max(0, layout.maxRows - 1) }
+            let isNew = panels[d.id] == nil
             let panel = panels[d.id] ?? OverviewPanel(controller: self)
             panels[d.id] = panel
+            // A display plugged in later gets the same head start as the ones at launch.
+            if isNew, !isOpen, didPrewarm { DispatchQueue.main.async { [weak panel] in panel?.prewarm() } }
             built.append(Screen(display: d, cards: cards, layout: layout, panel: panel, shownRows: shown))
         }
         // Panels of displays that went away.
@@ -369,7 +375,6 @@ final class OverviewController {
             dropTarget = target
             redrawSelection()
         }
-        _ = d
     }
 
     fileprivate func mouseUp(at p: CGPoint) {
@@ -490,13 +495,28 @@ private final class OverviewPanel {
 
     /// Shows the window once, invisibly, so WindowServer creates it and the blur now rather
     /// than on the first real open.
+    ///
+    /// The panel stays up (at alpha 0) until Core Animation has committed its first frame:
+    /// hidden in the same pass, WindowServer may never draw it and the blur isn't warmed up.
     func prewarm() {
         guard !panel.isVisible else { return }
+        let gen = generation
         panel.alphaValue = 0
         panel.orderFrontRegardless()
         panel.displayIfNeeded()
-        panel.orderOut(nil)
-        panel.alphaValue = 1
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [weak self] in
+            // One more frame for WindowServer to composite it, then hide (unless it was opened).
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+                MainActor.assumeIsolated {
+                    guard let self, self.generation == gen else { return }
+                    self.panel.orderOut(nil)
+                    self.panel.alphaValue = 1
+                }
+            }
+        }
+        CATransaction.commit()
+        CATransaction.flush()
     }
 
     /// Bumped by every show / hide / finish so an old animation's completion can't hide a
@@ -710,7 +730,10 @@ private final class OverviewView: NSView {
                 imageLayers[i].contentsScale = scale
                 imageKeys[i] = key
             }
-            imageLayers[i].frame = CGRect(origin: .zero, size: f.size)
+            // The image covers only the header and rows (top-aligned); the rest of the card is
+            // plain fill from the layer itself, so tall cards don't cost tall bitmaps.
+            let ih = Self.contentHeight(card, layout: c.layout)
+            imageLayers[i].frame = CGRect(x: 0, y: f.height - ih, width: f.width, height: ih)
         }
         images = images.filter { used.contains($0.key) }
 
@@ -739,7 +762,13 @@ private final class OverviewView: NSView {
             : f.insetBy(dx: 3, dy: 3)
     }
 
-    // MARK: Rendering (into card-sized bitmaps)
+    // MARK: Rendering (into bitmaps of each card's drawn area)
+
+    /// Height of what a card draws: header, rows and the "+N more" line (at most the card).
+    static func contentHeight(_ card: OverviewContent.CardContent, layout: OverviewModel.Layout) -> CGFloat {
+        let rows = layout.rowsTop + CGFloat(card.rows.count) * layout.rowHeight + (card.more > 0 ? 40 : 4)
+        return min(card.frame.height, max(layout.rowsTop, rows).rounded(.up))
+    }
 
     /// What a card image depends on.
     struct CardKey: Hashable {
@@ -785,7 +814,7 @@ private final class OverviewView: NSView {
     }
 
     fileprivate static func renderCard(_ card: OverviewContent.CardContent, layout: OverviewModel.Layout, scale: CGFloat) -> CGImage? {
-        let size = card.frame.size
+        let size = CGSize(width: card.frame.width, height: contentHeight(card, layout: layout))
         return render(size: size, scale: scale) {
             let w = size.width
             let n = card.card.windows.count
@@ -906,7 +935,11 @@ extension OverviewView {
             ctx.setStrokeColor(card.card.isActive ? blue : faint)
             ctx.setLineWidth(card.card.isActive ? 2 : 1)
             ctx.strokePath()
-            if let img = renderCard(card, layout: c.layout, scale: scale) { ctx.draw(img, in: f) }
+            if let img = renderCard(card, layout: c.layout, scale: scale) {
+                let top = CGRect(x: card.frame.minX, y: card.frame.minY, width: card.frame.width,
+                                 height: OverviewView.contentHeight(card, layout: c.layout))
+                ctx.draw(img, in: flip(top))
+            }
         }
         if let s = c.selection, let r = selectionRect(s, in: c) {
             ctx.addPath(CGPath(roundedRect: flip(r), cornerWidth: 11, cornerHeight: 11, transform: nil))

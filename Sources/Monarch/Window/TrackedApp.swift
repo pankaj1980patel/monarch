@@ -42,7 +42,15 @@ final class TrackedApp: @unchecked Sendable {
     private var windows: [(ref: AXRef, id: CGWindowID)] = []
     private var pendingFrame = Set<CGWindowID>()
     private var pendingTitle = Set<CGWindowID>()
+    /// Windows the engine has been told about (a first read succeeded and was reported).
+    /// A window can be tracked here without being announced: its first read timed out, or it
+    /// was adopted by the focus handler. Those are announced by whichever path reads them next.
+    private var announced = Set<CGWindowID>()
     private var appNotificationsAdded = false
+    /// The window list couldn't be read at the last discovery (all retries failed).
+    private var windowsUnread = false
+    /// When `ensureSubscribed` last re-ran discovery (rate limit).
+    private var lastResubscribe: Double = -.infinity
 
     private static let appNotifications = [
         kAXWindowCreatedNotification, kAXFocusedWindowChangedNotification,
@@ -105,26 +113,50 @@ final class TrackedApp: @unchecked Sendable {
                     return
                 }
             }
+            // An app that's still launching (or busy) may not answer: retry, like the
+            // notifications above, instead of taking "no answer" for "no windows".
+            guard let els = AX.elementsIfReadable(element, kAXWindowsAttribute) else {
+                if attempt < 4 {
+                    let delay = 0.25 * pow(2, Double(attempt))
+                    queue.asyncAfter(deadline: .now() + delay) { self.start(attempt: attempt + 1) }
+                } else {
+                    windowsUnread = true          // ensureSubscribed tries again when it's used
+                }
+                return
+            }
+            windowsUnread = false
             var found: [ManagedWindow] = []
-            for el in AX.elements(element, kAXWindowsAttribute) {
+            for el in els {
                 if let w = track(el) { found.append(w) }
             }
+            for w in found { announced.insert(w.id) }
             report(.discovered(pid, found))
             report(.focused(pid, AX.element(element, kAXFocusedWindowAttribute).flatMap(AX.windowID)))
         }
     }
 
-    /// Re-runs discovery if the app refused its notifications at launch (all retries failed),
-    /// so its new windows are seen once it's in use. Cheap no-op otherwise.
+    /// Re-runs discovery if the app refused its notifications or its window list at launch
+    /// (all retries failed), so its windows are seen once it's in use. At most once every 10 s:
+    /// an app that keeps refusing isn't set up again on every activation. Cheap no-op otherwise.
     func ensureSubscribed() {
         queue.async { [self] in
-            guard !appNotificationsAdded, isLive.load(ordering: .sequentiallyConsistent) else { return }
+            guard !appNotificationsAdded || windowsUnread, isLive.load(ordering: .sequentiallyConsistent) else { return }
+            let now = ProcessInfo.processInfo.systemUptime
+            guard now - lastResubscribe >= 10 else { return }
+            lastResubscribe = now
             start()
         }
     }
 
-    /// Starts tracking one window element; returns nil for non-standard windows. Queue only.
+    /// Starts tracking one window element; returns nil for non-standard windows or when its
+    /// first read fails (it stays tracked, unannounced). Queue only.
     private func track(_ el: AXUIElement) -> ManagedWindow? {
+        guard let id = adopt(el) else { return nil }
+        return snapshot(el, id)
+    }
+
+    /// Adds a standard window to the tracked list and subscribes to it; returns its id.
+    private func adopt(_ el: AXUIElement) -> CGWindowID? {
         guard AX.isStandardWindow(el), let id = AX.windowID(el) else { return nil }
         if !windows.contains(where: { $0.id == id }) {
             windows.append((AXRef(el), id))
@@ -134,7 +166,21 @@ final class TrackedApp: @unchecked Sendable {
                 }
             }
         }
-        return snapshot(el, id)
+        return id
+    }
+
+    /// Reports a window's current state to the engine (an add if it wasn't announced yet).
+    @discardableResult
+    private func upsert(_ el: AXUIElement, _ id: CGWindowID) -> Bool {
+        guard let w = snapshot(el, id) else { return false }
+        announced.insert(id)
+        report(.upsert(w))
+        return true
+    }
+
+    /// Announces a tracked window the engine hasn't heard of yet. No-op if already announced.
+    private func announceIfNeeded(_ el: AXUIElement, _ id: CGWindowID) {
+        if !announced.contains(id) { upsert(el, id) }
     }
 
     private static let snapshotAttributes = [kAXPositionAttribute, kAXSizeAttribute, kAXTitleAttribute, kAXMinimizedAttribute]
@@ -166,24 +212,26 @@ final class TrackedApp: @unchecked Sendable {
     private func handle(_ n: String, _ el: AXUIElement) {
         switch n {
         case kAXWindowCreatedNotification:
-            if let w = track(el) { report(.upsert(w)) }
-            else {
-                // Some apps set the role / subrole a moment after creating the window: look once more.
-                let ref = AXRef(el)
-                queue.asyncAfter(deadline: .now() + 0.15) { [self] in
-                    if knownID(ref.element) == nil, let w = track(ref.element) { report(.upsert(w)) }
-                }
+            if let id = adopt(el), upsert(el, id) { return }
+            // Some apps set the role / subrole a moment after creating the window, and a first
+            // read can time out: look once more. Whatever read it first (this retry, the focus
+            // handler, a move) announces it; this only fills in if nothing did.
+            let ref = AXRef(el)
+            queue.asyncAfter(deadline: .now() + 0.15) { [self] in
+                if let id = knownID(ref.element) ?? adopt(ref.element) { announceIfNeeded(ref.element, id) }
             }
 
         case kAXUIElementDestroyedNotification:
             // The element is already dead, so match it against what we stored.
             if let i = windows.firstIndex(where: { CFEqual($0.ref.element, el) }) {
                 let id = windows.remove(at: i).id
-                report(.removed(pid, id))
+                let wasAnnounced = announced.remove(id) != nil
+                if wasAnnounced { report(.removed(pid, id)) }
             }
 
         case kAXFocusedWindowChangedNotification:
-            let id = knownID(el) ?? (track(el)?.id)
+            let id = knownID(el) ?? adopt(el)
+            if let id { announceIfNeeded(el, id) }          // before .focused, so the engine knows it
             report(.focused(pid, id))
 
         case kAXWindowMovedNotification, kAXWindowResizedNotification:
@@ -192,7 +240,7 @@ final class TrackedApp: @unchecked Sendable {
             let ref = AXRef(el)
             queue.asyncAfter(deadline: .now() + 0.05) { [self] in
                 pendingFrame.remove(id)
-                if let w = snapshot(ref.element, id) { report(.upsert(w)) }
+                upsert(ref.element, id)
             }
 
         case kAXTitleChangedNotification:
@@ -202,11 +250,11 @@ final class TrackedApp: @unchecked Sendable {
             let ref = AXRef(el)
             queue.asyncAfter(deadline: .now() + 0.5) { [self] in
                 pendingTitle.remove(id)
-                if let w = snapshot(ref.element, id) { report(.upsert(w)) }
+                upsert(ref.element, id)
             }
 
         default:   // minimized, deminimized
-            if let id = knownID(el), let w = snapshot(el, id) { report(.upsert(w)) }
+            if let id = knownID(el) { upsert(el, id) }
         }
     }
 }

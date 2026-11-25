@@ -33,7 +33,9 @@ final class AutoFocusManager {
             // While a ⌘Tab pick is on its way, other windows macOS focuses in passing (e.g. when a
             // workspace switch parks the focused app's windows) don't count as "recently used".
             if let p = engine.pendingFocusID, p != id { return }
-            record(id)
+            // The window being picked may still be parked (macOS can report focus before the
+            // restore's move has been read back): it still counts, on its own display.
+            record(id, picked: engine.pendingFocusID == id)
         }
         engine.onRemove { [unowned self] id in history.forget(window: id) }
         tracker.onCross = { id, p in MainActor.assumeIsolated { self.crossed(to: id, at: p) } }
@@ -44,6 +46,9 @@ final class AutoFocusManager {
     var isListening: Bool { tracker.isActive }
     /// Most recently used windows, newest first (fed by every focus change). Used by ⌘Tab.
     var mru: [UInt32] { history.mru }
+    /// The display a parked window belongs to (from the workspaces), so a window picked on
+    /// another workspace is recorded as recently used even before it's back on screen.
+    var parkedDisplay: ((CGWindowID) -> UInt32?)?
 
     // MARK: Configuration
 
@@ -96,17 +101,26 @@ final class AutoFocusManager {
     /// not when macOS's notification arrives.
     func noteFocusing(_ id: CGWindowID) {
         engine.noteFocusing(id)
-        record(id)
+        record(id, picked: true)
     }
 
     /// Every focus change, however it happened (click, app switch, ⌘Tab, our own focusing),
     /// becomes the "last used" window of the display it is on.
-    private func record(_ id: CGWindowID) {
-        guard let w = engine.windows[id],
-              let d = Geometry.display(for: w.frame, in: displays.displays),
-              FocusLogic.visibleFraction(w.frame, on: d.frame) >= FocusLogic.minVisibleFraction
-        else { return }
-        history.record(window: id, display: d.id)
+    ///
+    /// Windows off screen (parked on a hidden workspace) are skipped, because macOS focuses
+    /// those in passing during workspace switches. The exception is a window Monarch is picking
+    /// itself (`picked`): ⌘Tab to a window on another workspace starts while it's still parked,
+    /// and skipping it then left the previous window "most recent", so the next quick ⌘Tab
+    /// went to the wrong window.
+    private func record(_ id: CGWindowID, picked: Bool = false) {
+        guard let w = engine.windows[id] else { return }
+        let screens = displays.displays
+        if let d = Geometry.display(for: w.frame, in: screens),
+           FocusLogic.visibleFraction(w.frame, on: d.frame) >= FocusLogic.minVisibleFraction {
+            history.record(window: id, display: d.id)
+        } else if picked, let home = parkedDisplay?(id), screens.contains(where: { $0.id == home }) {
+            history.record(window: id, display: home)
+        }
     }
 
     // MARK: Cross-screen

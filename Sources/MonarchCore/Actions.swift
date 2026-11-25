@@ -16,7 +16,6 @@ public enum Action: String, CaseIterable, Sendable, Codable {
     case rightThird = "snap.rightThird"
     case leftTwoThirds = "snap.leftTwoThirds"
     case rightTwoThirds = "snap.rightTwoThirds"
-    case undo = "snap.undo"
     // Screens
     case moveScreenWest = "screen.moveWest"
     case moveScreenEast = "screen.moveEast"
@@ -103,7 +102,6 @@ public enum Action: String, CaseIterable, Sendable, Codable {
         case .rightThird: "ctrl+alt+g"
         case .leftTwoThirds: "ctrl+alt+e"
         case .rightTwoThirds: "ctrl+alt+t"
-        case .undo: "ctrl+alt+delete"
         case .moveScreenWest: "ctrl+alt+cmd+left"
         case .moveScreenEast: "ctrl+alt+cmd+right"
         case .moveScreenNextMaximize: "ctrl+alt+cmd+return"

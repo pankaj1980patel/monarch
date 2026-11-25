@@ -108,12 +108,31 @@ final class WindowEngine {
         }
         apps[pid] = app
         if startNow, pid != ownPID, isRunning { app.start() }
-        if pid != ownPID {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-                if self?.apps[pid] != nil { AppIcons.prewarm(pid) }
-            }
-        }
+        if pid != ownPID { queueIcon(pid) }
         return app
+    }
+
+    // Icons are rendered on main. At launch every app is tracked at once, so render them one
+    // at a time (one every 40 ms, starting 1 s later) instead of in one burst.
+    private var iconBacklog: [pid_t] = []
+    private var iconDrainScheduled = false
+
+    private func queueIcon(_ pid: pid_t) {
+        iconBacklog.append(pid)
+        guard !iconDrainScheduled else { return }
+        iconDrainScheduled = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in self?.drainIcon() }
+    }
+
+    private func drainIcon() {
+        while let pid = iconBacklog.first {
+            iconBacklog.removeFirst()
+            guard apps[pid] != nil else { continue }               // quit meanwhile
+            AppIcons.prewarm(pid)
+            break
+        }
+        guard !iconBacklog.isEmpty else { iconDrainScheduled = false; return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) { [weak self] in self?.drainIcon() }
     }
 
     private func untrack(pid: pid_t) {
@@ -121,7 +140,7 @@ final class WindowEngine {
         app.invalidate()
         AppIcons.forget(pid)
         // The app quit: its windows are gone. Tell listeners, so parked entries, focus
-        // history and undo frames of those windows are dropped too.
+        // history and snap state of those windows are dropped too.
         let gone = windows.values.filter { $0.pid == pid }.map(\.id)
         for id in gone { windows.removeValue(forKey: id) }
         focusedWindow.removeValue(forKey: pid)
@@ -135,11 +154,14 @@ final class WindowEngine {
             guard apps[pid] != nil else { return }        // app quit meanwhile
             for w in list { windows[w.id] = w }
         case let .upsert(w):
-            guard apps[w.pid] != nil else { return }
+            guard apps[w.pid] != nil, windows[w.id] != w else { return }   // unchanged: nothing to tell
             windows[w.id] = w
             updateListeners.forEach { $0(w) }
-        case let .removed(_, id):
+        case let .removed(pid, id):
             windows.removeValue(forKey: id)
+            // A closed window is no longer its app's focused window (it may have been the last one).
+            if focusedWindow[pid] == id { focusedWindow.removeValue(forKey: pid) }
+            if pendingFocus?.id == id { pendingFocus = nil }
             removeListeners.forEach { $0(id) }
         case let .focused(pid, id):
             guard apps[pid] != nil else { return }

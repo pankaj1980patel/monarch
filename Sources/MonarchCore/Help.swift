@@ -38,7 +38,7 @@ public enum HelpSheet {
             row(.center, "Center (70%)"), row(.topLeft, "Top-left ¼"), row(.topRight, "Top-right ¼"),
             row(.bottomLeft, "Bottom-left ¼"), row(.bottomRight, "Bottom-right ¼"),
             row(.leftThird, "Left ⅓"), row(.centerThird, "Center ⅓"), row(.rightThird, "Right ⅓"),
-            row(.leftTwoThirds, "Left ⅔"), row(.rightTwoThirds, "Right ⅔"), row(.undo, "Undo last move"),
+            row(.leftTwoThirds, "Left ⅔"), row(.rightTwoThirds, "Right ⅔"),
             k(.arrangeAll).map { Row(keys: String($0.dropLast()) + "1…9", text: "Tile top N windows (0 = all)") }])
         add("Two screens", [
             row(.moveScreenWest, "Window → left screen"), row(.moveScreenEast, "Window → right screen"),

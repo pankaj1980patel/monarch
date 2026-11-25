@@ -83,24 +83,14 @@ struct HistoryTests {
     let f1 = CGRect(x: 0, y: 0, width: 100, height: 100)
     let f2 = CGRect(x: 50, y: 50, width: 200, height: 200)
 
-    func undoSwapsSoSecondUndoRedoes() {
-        let h = WindowHistory()
-        h.remember(7, f1)
-        expect(h.swapForUndo(7, current: f2) == f1)
-        expect(h.swapForUndo(7, current: f1) == f2)
-        expect(h.swapForUndo(8, current: f1) == nil)
-    }
-
     func cycleAdvancesOnlyWithinWindowForSameKeyAndWindow() {
         let h = WindowHistory()
-        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f1, now: 10) == 0)
-        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f2, now: 10.5) == 1)
-        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f2, now: 11) == 2)
-        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f2, now: 11.2) == 0)   // wraps
-        expect(h.nextCycleIndex(key: "right", window: 1, count: 3, current: f2, now: 11.3) == 0)  // other key
-        expect(h.nextCycleIndex(key: "right", window: 1, count: 3, current: f2, now: 13.0) == 0)  // too late
-        // Undo after a cycle returns to the frame before the cycle started, not a mid-cycle one.
-        expect(h.swapForUndo(1, current: f1) == f2)
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, now: 10) == 0)
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, now: 10.5) == 1)
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, now: 11) == 2)
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, now: 11.2) == 0)   // wraps
+        expect(h.nextCycleIndex(key: "right", window: 1, count: 3, now: 11.3) == 0)  // other key
+        expect(h.nextCycleIndex(key: "right", window: 1, count: 3, now: 13.0) == 0)  // too late
     }
 
     func fillToggleRoundTrip() {
@@ -562,7 +552,6 @@ run("GeometryTests.stackedScreensFallBackToOther") { GeometryTests().stackedScre
 run("GeometryTests.sideBySidePicksDirection") { GeometryTests().sideBySidePicksDirection() }
 run("GeometryTests.mapKeepsRelativeFrameAndStaysInside") { GeometryTests().mapKeepsRelativeFrameAndStaysInside() }
 run("GeometryTests.clampShrinksOversizedWindows") { GeometryTests().clampShrinksOversizedWindows() }
-run("HistoryTests.undoSwapsSoSecondUndoRedoes") { HistoryTests().undoSwapsSoSecondUndoRedoes() }
 run("HistoryTests.cycleAdvancesOnlyWithinWindowForSameKeyAndWindow") { HistoryTests().cycleAdvancesOnlyWithinWindowForSameKeyAndWindow() }
 run("HistoryTests.fillToggleRoundTrip") { HistoryTests().fillToggleRoundTrip() }
 run("ShortcutTests.parsesModifiersAndKeys") { try ShortcutTests().parsesModifiersAndKeys() }
@@ -674,7 +663,6 @@ run("ConfigRegressionTests.testGesturesDecoding") { try ConfigRegressionTests().
 run("ConfigRegressionTests.testRoundTrip") { try ConfigRegressionTests().testRoundTrip() }
 run("ArrangeRegressionTests.testColumnCountsTable") { ArrangeRegressionTests().testColumnCountsTable() }
 run("ArrangeRegressionTests.testFramesTileOddAreaWithoutGaps") { ArrangeRegressionTests().testFramesTileOddAreaWithoutGaps() }
-run("HistoryRegressionTests.testRememberOverwritesAndWindowsAreIndependent") { HistoryRegressionTests().testRememberOverwritesAndWindowsAreIndependent() }
 run("HistoryRegressionTests.testCycleResetRules") { HistoryRegressionTests().testCycleResetRules() }
 run("HistoryRegressionTests.testFillSaveTakePeek") { HistoryRegressionTests().testFillSaveTakePeek() }
 run("HistoryRegressionTests.testForgetClearsWindowOnly") { HistoryRegressionTests().testForgetClearsWindowOnly() }
@@ -690,5 +678,10 @@ run("HelpRegressionTests.testOnOffAndGestureFlag") { HelpRegressionTests().testO
 run("HelpRegressionTests.testRebindDisableAndFamilyBreaks") { HelpRegressionTests().testRebindDisableAndFamilyBreaks() }
 run("HelpRegressionTests.testEmptyBindingsDropSections") { HelpRegressionTests().testEmptyBindingsDropSections() }
 run("HelpRegressionTests.testColumnsBalance") { HelpRegressionTests().testColumnsBalance() }
+run("ConfigValidationTests.testDefaultsAreValid") { ConfigValidationTests().testDefaultsAreValid() }
+run("ConfigValidationTests.testBadShortcutUnknownActionAndDuplicates") { ConfigValidationTests().testBadShortcutUnknownActionAndDuplicates() }
+run("ConfigValidationTests.testEmptyBindingDisablesWithoutError") { ConfigValidationTests().testEmptyBindingDisablesWithoutError() }
+run("ConfigValidationTests.testRanges") { ConfigValidationTests().testRanges() }
+run("ConfigValidationTests.testDecodedFileWithMistakes") { try ConfigValidationTests().testDecodedFileWithMistakes() }
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

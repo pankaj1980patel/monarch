@@ -20,7 +20,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private lazy var gestures = GestureController(config: config.gestures ?? GestureConfig(), workspaces: workspaces,
                                                   overview: overview, perf: perf)
     private let sheet = SheetPanel()
-    private var configWatcher: FileWatcher?
     private lazy var switcher = SwitcherController(engine: engine, displays: displays, autoFocus: autoFocus,
                                                    hotkeys: hotkeys, workspaces: workspaces, perf: perf)
 
@@ -45,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             else if action.isFocusAction { autoFocus.perform(action, eventTime: time) }
             else if action == .showHelp { showHelp() }
             else if action == .gestureStatus { showGestureStatus() }
-            else if action == .reloadConfig { reload(fromFile: false) }
+            else if action == .reloadConfig { reload() }
             else { snap.perform(action, eventTime: time) }
         }
         autoFocus.onToggle = { [unowned self] cross, hover in
@@ -57,6 +56,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             autoFocus.displaysChanged()
             workspaces.displaysChanged()
             updateStatusTitle()
+        }
+        autoFocus.parkedDisplay = { [unowned self] id in
+            guard let e = workspaces.state.parked(id) else { return nil }
+            return displays.displays.first { $0.uuid == e.scr }?.id
         }
         workspaces.focus = { [unowned self] id, metric, start in
             guard let w = engine.windows[id], let app = engine.apps[w.pid] else { return }
@@ -74,18 +77,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // Shortcuts are registered only once Accessibility is allowed, so Hammerspoon keeps
         // them until Monarch can really act on them (see announce()).
+        // Granted (again): start fresh. Observers from before a revoke are dead, so the engine
+        // was stopped then and is rebuilt now.
         permissions.onGranted = { [unowned self] in engine.start(); applyBindings(); prewarmOverview() }
+        permissions.onRevoked = { [unowned self] in engine.stop(); applyBindings() }
         if permissions.isTrusted { engine.start(); applyBindings(); prewarmOverview() } else { permissions.prompt() }
 
         // Hammerspoon asks after a config reload; answer with the current state.
         queryToken = DistributedNotificationCenter.default().addObserver(
             forName: Self.queryNote, object: nil, queue: .main
         ) { _ in MainActor.assumeIsolated { self.announce() } }   // delegate lives for the whole run
-
-        // Saving config.json applies it (file events, no polling).
-        configWatcher = FileWatcher(url: ConfigurationStore.url) { [weak self] in
-            MainActor.assumeIsolated { self?.reload(fromFile: true) }
-        }
 
         // The agent-managed copy takes over from this one when it starts (see main.swift).
         handoverToken = DistributedNotificationCenter.default().addObserver(
@@ -376,19 +377,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openConfig() { NSWorkspace.shared.open(ConfigurationStore.url) }
 
-    @objc private func reloadConfig() { reload(fromFile: false) }
+    @objc private func reloadConfig() { reload() }
 
-    /// Re-reads config.json. From the file watcher: only if it really changed (Monarch's own
-    /// saves are skipped), and a file with an error (half-way through an edit) keeps the
-    /// current settings instead of falling back to defaults.
-    private func reload(fromFile: Bool) {
+    /// ⌃⌥⇧ R / the menu: re-reads config.json and applies it only if it's valid. A file that
+    /// doesn't parse, or has a bad shortcut, an unknown action, one key bound twice or a value
+    /// out of range, keeps the current settings; the problems are listed in the menu.
+    private func reload() {
         let (c, err) = ConfigurationStore.load()
-        if let err {
-            configErrors = [err]
-            toast.show("config.json has an error: settings unchanged", seconds: 2)
+        let problems = err.map { [$0] } ?? c.validate()
+        if !problems.isEmpty {
+            configErrors = problems
+            let first = problems[0]
+            toast.show("config.json not applied: \(first)" + (problems.count > 1 ? " (+\(problems.count - 1) more in the menu)" : ""), seconds: 3)
             return
         }
-        if fromFile && c == config { return }
         config = c
         configErrors = []
         if config.gestures == nil { config.gestures = GestureConfig() }

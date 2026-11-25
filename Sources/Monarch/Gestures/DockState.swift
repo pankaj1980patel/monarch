@@ -27,6 +27,9 @@ final class DockState {
     private var dockPID: pid_t = 0
     private var launchToken: NSObjectProtocol?
     private var pendingVerify: DispatchWorkItem?
+    /// Set once the keyboard-shortcut fallback worked where the Dock's own trigger didn't:
+    /// from then on the shortcut is sent directly, with no wait for the trigger to fail.
+    private var useShortcut = false
 
     private static let notes = ["AXExposeShowFrontWindows", "AXExposeShowAllWindows", "AXExposeShowDesktop", "AXExposeExit"]
 
@@ -149,24 +152,41 @@ final class DockState {
     /// window managers use). Fallback, only if the Dock didn't react: the user's App Exposé
     /// keyboard shortcut, and only if one is enabled in System Settings.
     private func toggleAppExpose(expect: Mode, log: @escaping (String) -> Void) -> Bool {
+        if useShortcut, Self.postShortcut() { verifyLater(expect, log: log, fallback: false); return true }
         let sent = Dock.send("com.apple.expose.front.awake")
         if !sent && !Self.postShortcut() { log("App Exposé: no way to reach the Dock"); return false }
+        verifyLater(expect, log: log, fallback: sent)
+        return true
+    }
+
+    /// Checks that the Dock reacted. With `fallback`, a Dock that didn't gets the user's
+    /// shortcut instead, and if that works it's used directly from then on.
+    ///
+    /// The wait is 0.5 s: the Dock can be slow to report App Exposé opening (the first time
+    /// after login especially), and a fallback sent while it's opening would close it again.
+    private func verifyLater(_ expect: Mode, log: @escaping (String) -> Void, fallback: Bool) {
         pendingVerify?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.resync()
             guard self.state != .confirmed(expect) else { return }
-            if sent, Self.postShortcut() {
+            if fallback, Self.postShortcut() {
                 log("Dock didn't react: used the App Exposé shortcut")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in self?.resync() }
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let self else { return }
+                    self.resync()
+                    if self.state == .confirmed(expect) {
+                        self.useShortcut = true
+                        log("App Exposé shortcut works: using it directly from now on")
+                    }
+                }
             } else {
+                if self.useShortcut { self.useShortcut = false }     // stopped working: try the Dock again next time
                 log("Dock didn't react (state \(self.describe))")
             }
         }
         pendingVerify = work
-        // The Dock reports App Exposé opening within a frame or two: check after 0.25 s.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
-        return true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
     }
 
     /// Posts the App Exposé shortcut if the user has it enabled (symbolic hotkey 33,

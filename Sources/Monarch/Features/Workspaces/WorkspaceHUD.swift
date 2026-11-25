@@ -30,8 +30,7 @@ final class WorkspaceHUD {
         CATransaction.setDisableActions(true)
         highlight.frame = cellRect(from ?? act)
         CATransaction.commit()
-        panel.alphaValue = 1
-        panel.orderFrontRegardless()
+        panel.showOpaque()
         if let from, from != act {
             CATransaction.begin()
             CATransaction.setAnimationDuration(0.24)
@@ -50,8 +49,7 @@ final class WorkspaceHUD {
         digits.needsDisplay = true
         highlight.isHidden = true
         place(panel, width: 9 * Self.cell + 2 * Self.pad, on: display)
-        panel.alphaValue = 1
-        panel.orderFrontRegardless()
+        panel.showOpaque()
         scheduleHide(after: 0.9)
     }
 
