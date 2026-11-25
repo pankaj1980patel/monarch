@@ -601,5 +601,91 @@ run("GestureTests.testInteractiveDecision") { GestureTests().testInteractiveDeci
 run("GestureTests.testConfigDecodingAndHammerspoonImport") { try GestureTests().testConfigDecodingAndHammerspoonImport() }
 run("Step9Tests.testHelpSheetUsesLiveBindingsAndBalancesColumns") { Step9Tests().testHelpSheetUsesLiveBindingsAndBalancesColumns() }
 run("Step9Tests.testHelpShortcutParses") { Step9Tests().testHelpShortcutParses() }
+run("GestureRegressionTests.testMinimumLockRatioFloor") { GestureRegressionTests().testMinimumLockRatioFloor() }
+run("GestureRegressionTests.testLockDistanceThreshold") { GestureRegressionTests().testLockDistanceThreshold() }
+run("GestureRegressionTests.testFirstFrameOnlyBaselinesAndBegins") { GestureRegressionTests().testFirstFrameOnlyBaselinesAndBegins() }
+run("GestureRegressionTests.testCrossedOnceAndAtLockWhenJumpIsBig") { GestureRegressionTests().testCrossedOnceAndAtLockWhenJumpIsBig() }
+run("GestureRegressionTests.testEndedAndLiftedTogetherAndOnlyOnce") { GestureRegressionTests().testEndedAndLiftedTogetherAndOnlyOnce() }
+run("GestureRegressionTests.testFiveFingersCancelBeforeLock") { GestureRegressionTests().testFiveFingersCancelBeforeLock() }
+run("GestureRegressionTests.testFiveFingersAfterLockDoNotCancel") { GestureRegressionTests().testFiveFingersAfterLockDoNotCancel() }
+run("GestureRegressionTests.testPartialLiftsAfterLockKeepGesture") { GestureRegressionTests().testPartialLiftsAfterLockKeepGesture() }
+run("GestureRegressionTests.testPartialLiftBeforeLockWaitsThenResumes") { GestureRegressionTests().testPartialLiftBeforeLockWaitsThenResumes() }
+run("GestureRegressionTests.testFreshFingerSetBeforeLockRestartsMeasurement") { GestureRegressionTests().testFreshFingerSetBeforeLockRestartsMeasurement() }
+run("GestureRegressionTests.testAspectCorrection") { GestureRegressionTests().testAspectCorrection() }
+run("GestureRegressionTests.testVelocitySignsAndEdgeCases") { GestureRegressionTests().testVelocitySignsAndEdgeCases() }
+run("GestureRegressionTests.testResetSemantics") { GestureRegressionTests().testResetSemantics() }
+run("GestureRegressionTests.testCurrentOnlyWhileLocked") { GestureRegressionTests().testCurrentOnlyWhileLocked() }
+run("GestureRegressionTests.testSwipeSampleDirectionAndDistance") { GestureRegressionTests().testSwipeSampleDirectionAndDistance() }
+run("GestureRegressionTests.testMoreThanTenTouchesDoNotCrash") { GestureRegressionTests().testMoreThanTenTouchesDoNotCrash() }
+run("GestureRegressionTests.testFourFingerHorizontalOnly") { GestureRegressionTests().testFourFingerHorizontalOnly() }
+run("GestureRegressionTests.testConfigDefaultsAndThreshold") { GestureRegressionTests().testConfigDefaultsAndThreshold() }
+run("GestureRegressionTests.testConfigDecoding") { try GestureRegressionTests().testConfigDecoding() }
+run("GestureRegressionTests.testHammerspoonImportValueTypes") { GestureRegressionTests().testHammerspoonImportValueTypes() }
+run("GestureRegressionTests.testInteractiveDecisionBoundaries") { GestureRegressionTests().testInteractiveDecisionBoundaries() }
+run("SwitcherRegressionTests.testDedupAndFilters") { SwitcherRegressionTests().testDedupAndFilters() }
+run("SwitcherRegressionTests.testMaxItemsCap") { SwitcherRegressionTests().testMaxItemsCap() }
+run("SwitcherRegressionTests.testZOrderLazy") { SwitcherRegressionTests().testZOrderLazy() }
+run("SwitcherRegressionTests.testInitialIndex") { SwitcherRegressionTests().testInitialIndex() }
+run("SwitcherRegressionTests.testMoveWraps") { SwitcherRegressionTests().testMoveWraps() }
+run("WorkspaceRegressionTests.testDefaultsAndLookups") { WorkspaceRegressionTests().testDefaultsAndLookups() }
+run("WorkspaceRegressionTests.testIncomingOrderAndFilters") { WorkspaceRegressionTests().testIncomingOrderAndFilters() }
+run("WorkspaceRegressionTests.testUsedAndMenuTitle") { WorkspaceRegressionTests().testUsedAndMenuTitle() }
+run("WorkspaceRegressionTests.testJSONRoundTripWithOptionalParkPoint") { try WorkspaceRegressionTests().testJSONRoundTripWithOptionalParkPoint() }
+run("WorkspaceRegressionTests.testParkedWindowRelativeFrame") { WorkspaceRegressionTests().testParkedWindowRelativeFrame() }
+run("WorkspaceRegressionTests.testHammerspoonImportShape") { WorkspaceRegressionTests().testHammerspoonImportShape() }
+run("WorkspaceRegressionTests.testParkingSpots") { WorkspaceRegressionTests().testParkingSpots() }
+run("WorkspaceRegressionTests.testOverlapsOtherThresholds") { WorkspaceRegressionTests().testOverlapsOtherThresholds() }
+run("WorkspaceRegressionTests.testIsAtParkTolerance") { WorkspaceRegressionTests().testIsAtParkTolerance() }
+run("WorkspaceRegressionTests.testFitClamps") { WorkspaceRegressionTests().testFitClamps() }
+run("OverviewRegressionTests.testCardsShapes") { OverviewRegressionTests().testCardsShapes() }
+run("OverviewRegressionTests.testCardsEdgeCases") { OverviewRegressionTests().testCardsEdgeCases() }
+run("OverviewRegressionTests.testLayoutColumnThreshold") { OverviewRegressionTests().testLayoutColumnThreshold() }
+run("OverviewRegressionTests.testLayoutFramesInsideAndCentred") { OverviewRegressionTests().testLayoutFramesInsideAndCentred() }
+run("OverviewRegressionTests.testLayoutGridPositionsAndRows") { OverviewRegressionTests().testLayoutGridPositionsAndRows() }
+run("OverviewRegressionTests.testSelectionMoves") { OverviewRegressionTests().testSelectionMoves() }
+run("OverviewRegressionTests.testSelectionAcrossRowsAndScreens") { OverviewRegressionTests().testSelectionAcrossRowsAndScreens() }
+run("FocusRegressionTests.testVisibleFraction") { FocusRegressionTests().testVisibleFraction() }
+run("FocusRegressionTests.testIsUsableAtMinVisibleBoundary") { FocusRegressionTests().testIsUsableAtMinVisibleBoundary() }
+run("FocusRegressionTests.testHistoryBehaviour") { FocusRegressionTests().testHistoryBehaviour() }
+run("FocusRegressionTests.testWindowForScreenFallbacks") { FocusRegressionTests().testWindowForScreenFallbacks() }
+run("FocusRegressionTests.testDirectionalTiesAndCone") { FocusRegressionTests().testDirectionalTiesAndCone() }
+run("GeometryRegressionTests.testRectRounding") { GeometryRegressionTests().testRectRounding() }
+run("GeometryRegressionTests.testCocoaToAXOnSecondaryDisplay") { GeometryRegressionTests().testCocoaToAXOnSecondaryDisplay() }
+run("GeometryRegressionTests.testNeighborVariants") { GeometryRegressionTests().testNeighborVariants() }
+run("GeometryRegressionTests.testMapAndClamp") { GeometryRegressionTests().testMapAndClamp() }
+run("GeometryRegressionTests.testNearlyEqualAndSameSizeTolerance") { GeometryRegressionTests().testNearlyEqualAndSameSizeTolerance() }
+run("GeometryRegressionTests.testDisplayForWindowEdgeCases") { GeometryRegressionTests().testDisplayForWindowEdgeCases() }
+run("GeometryRegressionTests.testDisplayAndUnitRectInit") { GeometryRegressionTests().testDisplayAndUnitRectInit() }
+run("ShortcutRegressionTests.testDescriptionSymbolsForSpecialKeys") { ShortcutRegressionTests().testDescriptionSymbolsForSpecialKeys() }
+run("ShortcutRegressionTests.testModifierOrderIsFixed") { ShortcutRegressionTests().testModifierOrderIsFixed() }
+run("ShortcutRegressionTests.testAliasesCaseAndWhitespace") { ShortcutRegressionTests().testAliasesCaseAndWhitespace() }
+run("ShortcutRegressionTests.testKeyCodeAliasesAndSpotChecks") { ShortcutRegressionTests().testKeyCodeAliasesAndSpotChecks() }
+run("ShortcutRegressionTests.testRejects") { ShortcutRegressionTests().testRejects() }
+run("ActionRegressionTests.testRawValuesAreStable") { ActionRegressionTests().testRawValuesAreStable() }
+run("ActionRegressionTests.testNumberedActionMappings") { ActionRegressionTests().testNumberedActionMappings() }
+run("ActionRegressionTests.testPredicatesPartitionEveryCase") { ActionRegressionTests().testPredicatesPartitionEveryCase() }
+run("ActionRegressionTests.testEveryDefaultParsesAndIsUniqueWithExpectedModifiers") { ActionRegressionTests().testEveryDefaultParsesAndIsUniqueWithExpectedModifiers() }
+run("ActionRegressionTests.testSnapLayoutPlans") { ActionRegressionTests().testSnapLayoutPlans() }
+run("ConfigRegressionTests.testDefaultsAndEmptyFile") { try ConfigRegressionTests().testDefaultsAndEmptyFile() }
+run("ConfigRegressionTests.testScalarsDecode") { try ConfigRegressionTests().testScalarsDecode() }
+run("ConfigRegressionTests.testEmptyStringDisablesAndMissingFallsBack") { try ConfigRegressionTests().testEmptyStringDisablesAndMissingFallsBack() }
+run("ConfigRegressionTests.testErrorReporting") { try ConfigRegressionTests().testErrorReporting() }
+run("ConfigRegressionTests.testGesturesDecoding") { try ConfigRegressionTests().testGesturesDecoding() }
+run("ConfigRegressionTests.testRoundTrip") { try ConfigRegressionTests().testRoundTrip() }
+run("ArrangeRegressionTests.testColumnCountsTable") { ArrangeRegressionTests().testColumnCountsTable() }
+run("ArrangeRegressionTests.testFramesTileOddAreaWithoutGaps") { ArrangeRegressionTests().testFramesTileOddAreaWithoutGaps() }
+run("HistoryRegressionTests.testRememberOverwritesAndWindowsAreIndependent") { HistoryRegressionTests().testRememberOverwritesAndWindowsAreIndependent() }
+run("HistoryRegressionTests.testCycleResetRules") { HistoryRegressionTests().testCycleResetRules() }
+run("HistoryRegressionTests.testFillSaveTakePeek") { HistoryRegressionTests().testFillSaveTakePeek() }
+run("HistoryRegressionTests.testForgetClearsWindowOnly") { HistoryRegressionTests().testForgetClearsWindowOnly() }
+run("PerfRegressionTests.testUnknownAndEmpty") { PerfRegressionTests().testUnknownAndEmpty() }
+run("PerfRegressionTests.testSinglePercentilesAndMetricsSorted") { PerfRegressionTests().testSinglePercentilesAndMetricsSorted() }
+run("PerfRegressionTests.testKnownPercentiles") { PerfRegressionTests().testKnownPercentiles() }
+run("PerfRegressionTests.testRingWrapAtCapacity") { PerfRegressionTests().testRingWrapAtCapacity() }
+run("HelpRegressionTests.testDefaultSectionTitlesAndFamilies") { HelpRegressionTests().testDefaultSectionTitlesAndFamilies() }
+run("HelpRegressionTests.testOnOffAndGestureFlag") { HelpRegressionTests().testOnOffAndGestureFlag() }
+run("HelpRegressionTests.testRebindDisableAndFamilyBreaks") { HelpRegressionTests().testRebindDisableAndFamilyBreaks() }
+run("HelpRegressionTests.testEmptyBindingsDropSections") { HelpRegressionTests().testEmptyBindingsDropSections() }
+run("HelpRegressionTests.testColumnsBalance") { HelpRegressionTests().testColumnsBalance() }
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)
