@@ -611,12 +611,12 @@ private final class OverviewView: NSView {
     private var images: [CardKey: CGImage] = [:]
     private var imageKeys: [CardKey?] = []
 
-    private static let tint = CGColor(red: 0.03, green: 0.035, blue: 0.05, alpha: 0.55)
-    private static let activeFill = CGColor(red: 0.10, green: 0.16, blue: 0.28, alpha: 0.92)
-    private static let fill = CGColor(red: 0.11, green: 0.115, blue: 0.14, alpha: 0.92)
-    private static let green = CGColor(red: 0.36, green: 0.86, blue: 0.52, alpha: 1)
-    private static let blue = CGColor(red: 0.35, green: 0.6, blue: 1, alpha: 0.95)
-    private static let faint = CGColor(gray: 1, alpha: 0.12)
+    fileprivate static let tint = CGColor(red: 0.03, green: 0.035, blue: 0.05, alpha: 0.55)
+    fileprivate static let activeFill = CGColor(red: 0.10, green: 0.16, blue: 0.28, alpha: 0.92)
+    fileprivate static let fill = CGColor(red: 0.11, green: 0.115, blue: 0.14, alpha: 0.92)
+    fileprivate static let green = CGColor(red: 0.36, green: 0.86, blue: 0.52, alpha: 1)
+    fileprivate static let blue = CGColor(red: 0.35, green: 0.6, blue: 1, alpha: 0.95)
+    fileprivate static let faint = CGColor(gray: 1, alpha: 0.12)
 
     init(controller: OverviewController) {
         self.controller = controller
@@ -757,7 +757,7 @@ private final class OverviewView: NSView {
     }
 
     /// Draws with a flipped (top-left) graphics context into a bitmap of `size` points.
-    private static func render(size: CGSize, scale: CGFloat, _ draw: () -> Void) -> CGImage? {
+    fileprivate static func render(size: CGSize, scale: CGFloat, _ draw: () -> Void) -> CGImage? {
         let pw = Int((size.width * scale).rounded()), ph = Int((size.height * scale).rounded())
         guard pw > 0, ph > 0,
               let ctx = CGContext(data: nil, width: pw, height: ph, bitsPerComponent: 8, bytesPerRow: 0,
@@ -774,7 +774,7 @@ private final class OverviewView: NSView {
         return ctx.makeImage()
     }
 
-    private static func renderHeader(_ name: String, size: CGSize, scale: CGFloat) -> CGImage? {
+    fileprivate static func renderHeader(_ name: String, size: CGSize, scale: CGFloat) -> CGImage? {
         render(size: size, scale: scale) {
             let header = NSMutableAttributedString(string: name + "   ", attributes: [
                 .font: NSFont.systemFont(ofSize: 22, weight: .bold), .foregroundColor: NSColor.white])
@@ -784,7 +784,7 @@ private final class OverviewView: NSView {
         }
     }
 
-    private static func renderCard(_ card: OverviewContent.CardContent, layout: OverviewModel.Layout, scale: CGFloat) -> CGImage? {
+    fileprivate static func renderCard(_ card: OverviewContent.CardContent, layout: OverviewModel.Layout, scale: CGFloat) -> CGImage? {
         let size = card.frame.size
         return render(size: size, scale: scale) {
             let w = size.width
@@ -818,5 +818,100 @@ private final class OverviewView: NSView {
                     .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor(white: 1, alpha: 0.5)])
             }
         }
+    }
+}
+
+// MARK: - Demo render (README screenshot)
+
+/// `Monarch --render-overview-demo <file.png>`: draws one display's overview with sample
+/// windows from built-in macOS apps, using the same card rendering as the real overview, over
+/// a plain gradient that stands in for the blurred desktop. Nothing from the user's own
+/// windows appears, so the image can be published.
+enum OverviewDemo {
+    @MainActor
+    static func render(to url: URL) -> Bool {
+        let size = CGSize(width: 1728, height: 1117)            // a MacBook display, in points
+        let apps: [(path: String, name: String, title: String)] = [
+            ("/Applications/Safari.app", "Safari", "Release notes · monarch"),
+            ("/System/Applications/Utilities/Terminal.app", "Terminal", "~/monarch — zsh"),
+            ("/System/Applications/Notes.app", "Notes", "Ideas"),
+            ("/System/Applications/Music.app", "Music", "Up Next"),
+            ("/System/Applications/Mail.app", "Mail", "Inbox"),
+            ("/System/Applications/Calendar.app", "Calendar", "This Week"),
+            ("/System/Applications/Maps.app", "Maps", "Directions"),
+            ("/System/Applications/Preview.app", "Preview", "blueprint.pdf"),
+            ("/System/Applications/TextEdit.app", "TextEdit", "Shortcuts.txt"),
+        ]
+        // Workspace 1 (active): windows 1–4; workspace 2: 5–7; workspace 3: 8–9.
+        let cards = OverviewModel.cards(active: 1, visible: [1, 2, 3, 4],
+                                        parked: [(5, 2, 1), (6, 2, 2), (7, 2, 3), (8, 3, 1), (9, 3, 2)])
+        let layout = OverviewModel.layout(cardCount: cards.count, size: size)
+        let rows = layout.maxRows
+        let content = OverviewContent(
+            name: "Built-in Retina Display",
+            cards: cards.enumerated().map { ci, card in
+                let shown = card.windows.prefix(rows).map { id -> OverviewContent.Row in
+                    let a = apps[Int(id) - 1]
+                    let icon = NSWorkspace.shared.icon(forFile: a.path)
+                    return .init(id: id, appName: a.name, title: a.title, icon: icon)
+                }
+                return .init(frame: layout.cardFrames[ci], card: card, rows: Array(shown),
+                             more: card.windows.count - shown.count, isDropTarget: false)
+            },
+            layout: layout,
+            selection: .init(card: 0, row: 2, carrying: false),
+            version: 0)
+        guard let image = OverviewView.demoImage(content, size: size, scale: 2) else { return false }
+        let rep = NSBitmapImageRep(cgImage: image)
+        guard let png = rep.representation(using: .png, properties: [:]) else { return false }
+        return (try? png.write(to: url)) != nil
+    }
+}
+
+extension OverviewView {
+    /// The whole overview as one image: gradient background, tint, header, cards with their
+    /// shadows and borders, card images, selection ring.
+    fileprivate static func demoImage(_ c: OverviewContent, size: CGSize, scale: CGFloat) -> CGImage? {
+        let pw = Int(size.width * scale), ph = Int(size.height * scale)
+        guard let ctx = CGContext(data: nil, width: pw, height: ph, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        ctx.scaleBy(x: scale, y: scale)
+        // Stand-in for the blurred desktop.
+        let grad = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
+                              colors: [CGColor(red: 0.13, green: 0.16, blue: 0.30, alpha: 1),
+                                       CGColor(red: 0.20, green: 0.12, blue: 0.28, alpha: 1)] as CFArray,
+                              locations: [0, 1])!
+        ctx.drawLinearGradient(grad, start: CGPoint(x: 0, y: size.height), end: CGPoint(x: size.width, y: 0), options: [])
+        ctx.setFillColor(tint)
+        ctx.fill(CGRect(origin: .zero, size: size))
+        func flip(_ r: CGRect) -> CGRect { CGRect(x: r.minX, y: size.height - r.maxY, width: r.width, height: r.height) }
+
+        let hRect = CGRect(x: 44, y: 34, width: size.width - 88, height: 34)
+        if let h = renderHeader(c.name, size: hRect.size, scale: scale) { ctx.draw(h, in: flip(hRect)) }
+
+        for card in c.cards {
+            let f = flip(card.frame)
+            let path = CGPath(roundedRect: f, cornerWidth: 16, cornerHeight: 16, transform: nil)
+            ctx.saveGState()
+            ctx.setShadow(offset: CGSize(width: 0, height: -3), blur: 16, color: CGColor(gray: 0, alpha: 0.45))
+            ctx.addPath(path)
+            ctx.setFillColor(card.card.isActive ? activeFill : fill)
+            ctx.fillPath()
+            ctx.restoreGState()
+            ctx.addPath(path)
+            ctx.setStrokeColor(card.card.isActive ? blue : faint)
+            ctx.setLineWidth(card.card.isActive ? 2 : 1)
+            ctx.strokePath()
+            if let img = renderCard(card, layout: c.layout, scale: scale) { ctx.draw(img, in: f) }
+        }
+        if let s = c.selection, let r = selectionRect(s, in: c) {
+            ctx.addPath(CGPath(roundedRect: flip(r), cornerWidth: 11, cornerHeight: 11, transform: nil))
+            ctx.setStrokeColor(CGColor(gray: 1, alpha: 0.95))
+            ctx.setLineWidth(2.5)
+            ctx.strokePath()
+        }
+        return ctx.makeImage()
     }
 }

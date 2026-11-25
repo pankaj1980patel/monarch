@@ -2,6 +2,10 @@
 
 A lightweight native macOS window manager (Swift 6 / AppKit, menu bar app) that replaces a Hammerspoon setup: snapping, auto focus, a custom ⌘Tab switcher, nine workspaces per display, an overview, and three/four-finger trackpad gestures.
 
+![The overview: each workspace as a card listing its windows, with a "+" card for the next empty workspace](docs/images/overview.png)
+
+*The overview (⌃⌥ Space, or a three-finger swipe up). This image uses sample windows and is regenerated with `Monarch --render-overview-demo docs/images/overview.png` (crop to the cards).*
+
 - Event-driven: Carbon hotkeys, AX observers, a listen-only mouse tap; no polling.
 - Per-app Accessibility queues with a 0.25 s timeout, so a hung app can't stall the rest.
 - No screenshots, no Screen Recording permission.

@@ -21,6 +21,13 @@ if CommandLine.arguments.contains("--unregister-login") {
     catch { print("unregister failed: \(error)") }
     exit(0)
 }
+// `Monarch --render-overview-demo <file.png>`: the README screenshot, from sample data.
+if let i = CommandLine.arguments.firstIndex(of: "--render-overview-demo"), i + 1 < CommandLine.arguments.count {
+    let url = URL(fileURLWithPath: CommandLine.arguments[i + 1])
+    let ok = MainActor.assumeIsolated { OverviewDemo.render(to: url) }
+    print(ok ? "wrote \(url.path)" : "render failed")
+    exit(ok ? 0 : 1)
+}
 // `Monarch --register-login`: (re-)registers the login agent and prints the result.
 // launchd ties the agent to the bundle version it was registered with, so after a rebuild
 // (new CFBundleVersion) it must be unregistered and registered again, or it won't start.
