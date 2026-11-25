@@ -830,7 +830,9 @@ private final class OverviewView: NSView {
 enum OverviewDemo {
     @MainActor
     static func render(to url: URL) -> Bool {
-        let size = CGSize(width: 1728, height: 1117)            // a MacBook display, in points
+        // The main display's real size (as the overview would use it), so text and cards have
+        // the same proportions as on screen.
+        let size = NSScreen.main?.frame.size ?? CGSize(width: 1280, height: 800)
         let apps: [(path: String, name: String, title: String)] = [
             ("/Applications/Safari.app", "Safari", "Release notes · monarch"),
             ("/System/Applications/Utilities/Terminal.app", "Terminal", "~/monarch — zsh"),
@@ -842,9 +844,9 @@ enum OverviewDemo {
             ("/System/Applications/Preview.app", "Preview", "blueprint.pdf"),
             ("/System/Applications/TextEdit.app", "TextEdit", "Shortcuts.txt"),
         ]
-        // Workspace 1 (active): windows 1–4; workspace 2: 5–7; workspace 3: 8–9.
-        let cards = OverviewModel.cards(active: 1, visible: [1, 2, 3, 4],
-                                        parked: [(5, 2, 1), (6, 2, 2), (7, 2, 3), (8, 3, 1), (9, 3, 2)])
+        // Workspace 1 (active): six windows; workspace 2: three; then the "+" card.
+        let cards = OverviewModel.cards(active: 1, visible: [1, 2, 3, 4, 8, 9],
+                                        parked: [(5, 2, 1), (6, 2, 2), (7, 2, 3)])
         let layout = OverviewModel.layout(cardCount: cards.count, size: size)
         let rows = layout.maxRows
         let content = OverviewContent(
@@ -859,7 +861,7 @@ enum OverviewDemo {
                              more: card.windows.count - shown.count, isDropTarget: false)
             },
             layout: layout,
-            selection: .init(card: 0, row: 2, carrying: false),
+            selection: .init(card: 0, row: 1, carrying: false),
             version: 0)
         guard let image = OverviewView.demoImage(content, size: size, scale: 2) else { return false }
         let rep = NSBitmapImageRep(cgImage: image)
@@ -878,10 +880,10 @@ extension OverviewView {
                                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
         else { return nil }
         ctx.scaleBy(x: scale, y: scale)
-        // Stand-in for the blurred desktop.
+        // Stand-in for the blurred desktop under the dark blur material (near black).
         let grad = CGGradient(colorsSpace: CGColorSpace(name: CGColorSpace.sRGB),
-                              colors: [CGColor(red: 0.13, green: 0.16, blue: 0.30, alpha: 1),
-                                       CGColor(red: 0.20, green: 0.12, blue: 0.28, alpha: 1)] as CFArray,
+                              colors: [CGColor(red: 0.12, green: 0.125, blue: 0.15, alpha: 1),
+                                       CGColor(red: 0.10, green: 0.10, blue: 0.13, alpha: 1)] as CFArray,
                               locations: [0, 1])!
         ctx.drawLinearGradient(grad, start: CGPoint(x: 0, y: size.height), end: CGPoint(x: size.width, y: 0), options: [])
         ctx.setFillColor(tint)
