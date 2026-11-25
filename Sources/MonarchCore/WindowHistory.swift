@@ -65,6 +65,8 @@ public final class WindowHistory: Sendable {
         state.withLock { s in
             s.previous.removeValue(forKey: window)
             s.beforeFill.removeValue(forKey: window)
+            // A new window that reuses this ID must start its own cycle.
+            if s.cycle.window == window { s.cycle = CycleState() }
         }
     }
 }

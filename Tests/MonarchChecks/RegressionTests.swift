@@ -961,7 +961,8 @@ struct ShortcutRegressionTests {
         var ok = true
         func soft(_ c: @autoclosure () -> Bool, line: Int = #line) { if !c() { ok = false; print("  soft check failed at line \(line)") } }
         let pairs: [(String, String)] = [("left", "←"), ("right", "→"), ("up", "↑"), ("down", "↓"), ("return", "↩"),
-                                         ("delete", "⌫"), ("space", "Space"), ("tab", "⇥"), ("escape", "⎋")]
+                                         ("delete", "⌫"), ("space", "Space"), ("tab", "⇥"), ("escape", "⎋"),
+                                         ("enter", "↩"), ("backspace", "⌫"), ("esc", "⎋")]
         for (k, sym) in pairs {
             soft(Shortcut("ctrl+" + k)?.description == "⌃ " + sym)
         }
@@ -1292,6 +1293,19 @@ struct HistoryRegressionTests {
     let f1 = CGRect(x: 0, y: 0, width: 100, height: 100)
     let f2 = CGRect(x: 50, y: 50, width: 200, height: 200)
     let f3 = CGRect(x: 9, y: 9, width: 9, height: 9)
+
+    func testForgetResetsCycleForReusedID() {
+        let h = WindowHistory()
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f1, now: 0) == 0)
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f1, now: 0.5) == 1)
+        h.forget(1)                                   // closed; a new window reuses ID 1
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f2, now: 0.8) == 0)
+        expect(h.swapForUndo(1, current: f3) == f2)   // undo goes to the new window's frame
+        // Forgetting another window leaves the cycle alone.
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f2, now: 1.0) == 1)
+        h.forget(2)
+        expect(h.nextCycleIndex(key: "left", window: 1, count: 3, current: f2, now: 1.2) == 2)
+    }
 
     func testRememberOverwritesAndWindowsAreIndependent() {
         let h = WindowHistory()

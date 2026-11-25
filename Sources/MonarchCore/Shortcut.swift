@@ -41,7 +41,8 @@ public struct Shortcut: Sendable, Equatable, Hashable, CustomStringConvertible {
         if modifiers & Self.shift != 0 { s += "⇧" }
         if modifiers & Self.cmd != 0 { s += "⌘" }
         let symbols = ["left": "←", "right": "→", "up": "↑", "down": "↓", "return": "↩",
-                       "delete": "⌫", "space": "Space", "tab": "⇥", "escape": "⎋"]
+                       "delete": "⌫", "space": "Space", "tab": "⇥", "escape": "⎋",
+                       "enter": "↩", "backspace": "⌫", "esc": "⎋"]
         return s + " " + (symbols[keyName] ?? keyName.uppercased())
     }
 
