@@ -47,7 +47,20 @@ final class WorkspaceManager {
         }
         // Moved out of its parking spot by the user or an app (e.g. a layout): no longer parked.
         engine.onUpdate { [unowned self] w in
-            guard isActive, let e = state.parked(w.id), !Parking.isAtPark(w.frame, e) else { return }
+            guard isActive, let e = state.parked(w.id), !parksInFlight.contains(w.id) else { return }
+            if e.px == nil {
+                // Parked, but its spot was never read back: learn it from this frame if the
+                // window is still off screen; if it's back on screen, it's no longer parked.
+                if isOffScreen(w.frame) {
+                    state.hidden[String(w.id)]?.px = w.frame.minX
+                    state.hidden[String(w.id)]?.py = w.frame.minY
+                } else {
+                    state.hidden.removeValue(forKey: String(w.id))
+                }
+                save()
+                return
+            }
+            guard !Parking.isAtPark(w.frame, e) else { return }
             state.hidden.removeValue(forKey: String(w.id))
             save()
         }
@@ -241,6 +254,15 @@ final class WorkspaceManager {
             restores.append((id, Parking.fit(e.relativeFrame, into: d.visibleFrame.size)
                 .offsetBy(dx: d.visibleFrame.minX, dy: d.visibleFrame.minY)))
         }
+        // Also rescue windows left off screen without a parked entry (a lost park, a crash):
+        // ⌃⌥⇧ 0 means "every window back", whatever the saved state says.
+        let parkedIDs = Set(previous.keys)
+        for w in engine.windows.values where !parkedIDs.contains(w.id) && !w.isMinimized && isOffScreen(w.frame) {
+            guard let d = Geometry.display(for: w.frame, in: list) ?? list.first else { continue }
+            let rel = CGRect(x: 40, y: 40, width: w.frame.width, height: w.frame.height)
+            restores.append((w.id, Parking.fit(rel, into: d.visibleFrame.size)
+                .offsetBy(dx: d.visibleFrame.minX, dy: d.visibleFrame.minY)))
+        }
         state.hidden.removeAll()
         state.active.removeAll()
         guard let home = list.first else { save(); return }
@@ -295,7 +317,7 @@ final class WorkspaceManager {
         }
         for (pid, work) in byApp {
             guard let app = engine.apps[pid] else {
-                for (id, _) in work.parks { results.add(id, nil) }          // app gone: nothing parked
+                for (id, _) in work.parks { results.add(id, .notMoved) }    // app gone: nothing parked
                 continue
             }
             let isFocusApp = pid == focusPID
@@ -315,24 +337,29 @@ final class WorkspaceManager {
                 if isFocusApp { focusEarly?() }
                 for (id, size) in work.parks {
                     // Not moved (missing element, full screen, hung app): not parked either.
-                    guard !hung, let win = app.element(for: id) else { results.add(id, nil); continue }
+                    guard !hung, let win = app.element(for: id) else { results.add(id, .notMoved); continue }
                     let t = PerformanceMonitor.now()
                     // macOS full-screen windows live in their own Space: leave them alone.
-                    if AX.bool(win, "AXFullScreen") == true { results.add(id, nil); continue }
-                    let spot = Self.park(win, size: size, home: home, displays: screens)
-                    if spot == nil && PerformanceMonitor.now() - t > Self.hungAfter { hung = true }
-                    results.add(id, spot)
+                    if AX.bool(win, "AXFullScreen") == true { results.add(id, .notMoved); continue }
+                    let outcome = Self.park(win, size: size, home: home, displays: screens)
+                    if case .notMoved = outcome, PerformanceMonitor.now() - t > Self.hungAfter { hung = true }
+                    results.add(id, outcome)
                 }
             }
         }
 
+        for (id, _) in byApp.values.flatMap(\.parks) { parksInFlight.insert(id) }
         var finished = false
         let finish: @MainActor (_ final: Bool) -> Void = { [weak self] final in
             guard let self else { return }
-            for (id, spot) in results.takeAll() {
+            for (id, outcome) in results.takeAll() {
                 let key = String(id)
-                if let spot { self.state.hidden[key]?.px = spot.x; self.state.hidden[key]?.py = spot.y }
-                else { self.state.hidden.removeValue(forKey: key) }
+                self.parksInFlight.remove(id)
+                switch outcome {
+                case let .at(spot): self.state.hidden[key]?.px = spot.x; self.state.hidden[key]?.py = spot.y
+                case .movedUnread: break     // it did move: stays parked; the spot is learned from its next frame
+                case .notMoved: self.state.hidden.removeValue(forKey: key)
+                }
             }
             for id in results.takeFailedRestores() {
                 if let e = previous[id] { self.state.hidden[String(id)] = e }  // still parked: keep it findable
@@ -361,16 +388,24 @@ final class WorkspaceManager {
 
     /// Parks one window off a corner of `home`; returns where macOS actually put it.
     /// `size` comes from the engine's cache (no round trip). App queue only.
-    nonisolated private static func park(_ win: AXUIElement, size: CGSize, home: Display, displays: [Display]) -> CGPoint? {
-        var last: CGPoint?
+    nonisolated private static func park(_ win: AXUIElement, size: CGSize, home: Display, displays: [Display]) -> ParkOutcome {
+        var outcome = ParkOutcome.notMoved
         for spot in Parking.spots(for: size, screen: home.frame) {
-            AX.setPoint(win, spot)
-            guard let actual = AX.point(win) else { break }               // no answer: don't try more spots
-            last = actual
+            guard AX.setPoint(win, spot) else { break }                    // the app refused the move
+            // The move went through. If the app doesn't answer the read-back (Chrome often
+            // doesn't, right after a move), the window is still parked: never forget it.
+            guard let actual = AX.point(win) else {
+                if case .notMoved = outcome { outcome = .movedUnread }
+                break
+            }
+            outcome = .at(actual)
             if !Parking.overlapsOther(CGRect(origin: actual, size: size), home: home.id, displays: displays) { break }
         }
-        return last
+        return outcome
     }
+
+    /// Windows whose park move hasn't reported back yet.
+    private var parksInFlight = Set<CGWindowID>()
 
     // MARK: Helpers
 
@@ -406,6 +441,11 @@ final class WorkspaceManager {
 
     private func display(_ uuid: String) -> Display? { displays.displays.first { $0.uuid == uuid } }
 
+    /// Almost entirely off every display (where parking puts windows).
+    private func isOffScreen(_ frame: CGRect) -> Bool {
+        !displays.displays.contains { FocusLogic.visibleFraction(frame, on: $0.frame) >= FocusLogic.minVisibleFraction }
+    }
+
     private func mouseDisplay() -> Display? {
         let p = AutoFocusManager.cursor()
         return displays.displays.first { $0.frame.contains(p) } ?? displays.displays.first
@@ -440,14 +480,24 @@ private final class StateWriter: @unchecked Sendable {
     func flush() { queue.sync {} }
 }
 
+/// What parking one window did.
+enum ParkOutcome: Sendable {
+    /// Moved, and macOS reports it here.
+    case at(CGPoint)
+    /// Moved, but the app didn't answer where it ended up.
+    case movedUnread
+    /// Not moved (refused, missing, full screen, hung app).
+    case notMoved
+}
+
 /// Collects park results from several app queues.
 private final class ParkResults: @unchecked Sendable {
     private let lock = NSLock()
-    private var items: [(CGWindowID, CGPoint?)] = []
+    private var items: [(CGWindowID, ParkOutcome)] = []
     private var failed: [CGWindowID] = []
-    func add(_ id: CGWindowID, _ p: CGPoint?) { lock.lock(); items.append((id, p)); lock.unlock() }
+    func add(_ id: CGWindowID, _ o: ParkOutcome) { lock.lock(); items.append((id, o)); lock.unlock() }
     func failedRestore(_ id: CGWindowID) { lock.lock(); failed.append(id); lock.unlock() }
     /// Results so far, each handed out once (the deadline and the final pass both read them).
-    func takeAll() -> [(CGWindowID, CGPoint?)] { lock.lock(); defer { items.removeAll(); lock.unlock() }; return items }
+    func takeAll() -> [(CGWindowID, ParkOutcome)] { lock.lock(); defer { items.removeAll(); lock.unlock() }; return items }
     func takeFailedRestores() -> [CGWindowID] { lock.lock(); defer { failed.removeAll(); lock.unlock() }; return failed }
 }

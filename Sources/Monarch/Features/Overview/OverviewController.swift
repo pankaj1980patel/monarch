@@ -56,8 +56,8 @@ final class OverviewController {
         self.perf = perf
         self.bridge = bridge
         // Window frames settle a moment after moves: refresh (coalesced) while open.
-        engine.onUpdate { [unowned self] _ in if isOpen { scheduleRefresh() } }
-        engine.onRemove { [unowned self] _ in if isOpen { scheduleRefresh() } }
+        engine.onUpdate { [unowned self] _ in stateChanged() }
+        engine.onRemove { [unowned self] _ in stateChanged() }
     }
 
     // MARK: Open / close
@@ -72,12 +72,15 @@ final class OverviewController {
         grabbed = nil
         dropTarget = nil
         rebuild(initialSelection: true)
+        // Timed when Core Animation has committed the first frame, not right after orderFront.
+        CATransaction.begin()
+        CATransaction.setCompletionBlock { [perf] in perf.record("14 overview: open → first frame", since: eventTime) }
         for s in screens { s.panel.show(animated: true) }
+        CATransaction.commit()
         // Keyboard goes to the panel on the mouse's display.
         let mouse = AutoFocusManager.cursor()
         (screens.first { $0.display.frame.contains(mouse) } ?? screens.first)?.panel.makeKey()
         bridge.overviewChanged(open: true)
-        perf.record("14 overview: open → shown", since: eventTime)
     }
 
     func close() {
@@ -142,7 +145,31 @@ final class OverviewController {
     }
 
     /// Workspace state changed (a move finished, a window closed, a display changed).
-    func refreshIfOpen() { if isOpen { scheduleRefresh() } }
+    func refreshIfOpen() { stateChanged() }
+
+    /// Windows or workspaces changed. Open: refresh soon. Closed: prepare the cards in the
+    /// background (batched, at most once a second), so opening only swaps in images that are
+    /// already rendered.
+    private func stateChanged() {
+        if isOpen { scheduleRefresh(); return }
+        guard prerenderWork == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.prerenderWork = nil
+            if !self.isOpen && self.workspaces.isActive { self.rebuild(initialSelection: true) }
+        }
+        prerenderWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: work)
+    }
+    private var prerenderWork: DispatchWorkItem?
+
+    /// Shortly after launch: build the panels and their cards, and have WindowServer create
+    /// the windows and blur, so the first open costs what every open costs.
+    func prewarm() {
+        guard !isOpen, workspaces.isActive else { return }
+        rebuild(initialSelection: true)
+        for s in screens { s.panel.prewarm() }
+    }
 
     /// Hammerspoon's gesture code: fingers down / all lifted. With tap-to-click on, lifting
     /// three fingers after the swipe that opened the overview registers as a click.
@@ -424,7 +451,8 @@ private final class OverviewPanel {
     private let view: OverviewView
 
     init(controller: OverviewController) {
-        panel = KeyPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
+        // defer: false, so the window exists now (prewarm) instead of at the first open.
+        panel = KeyPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         panel.level = .popUpMenu
         panel.isOpaque = false
         panel.backgroundColor = .clear
@@ -454,27 +482,21 @@ private final class OverviewPanel {
             panel.setFrame(frame, display: false)
             view.frame = panel.contentView?.bounds ?? .zero
         }
-        view.content = content
-        view.needsDisplay = true
+        view.apply(content, scale: screen?.backingScaleFactor ?? 2)
     }
 
-    /// Selection / drop-target changes redraw only the rectangles involved; a display where
-    /// nothing changed doesn't redraw at all. New cards redraw everything.
-    func update(content: OverviewContent) {
-        guard let old = view.content, old.version == content.version, old.cards.count == content.cards.count else {
-            view.content = content
-            view.needsDisplay = true
-            return
-        }
-        view.content = content
-        if old.selection != content.selection {
-            for s in [old.selection, content.selection] {
-                if let s, let r = OverviewView.selectionRect(s, in: content) { view.setNeedsDisplay(r.insetBy(dx: -4, dy: -4)) }
-            }
-        }
-        for (a, b) in zip(old.cards, content.cards) where a.isDropTarget != b.isDropTarget {
-            view.setNeedsDisplay(b.frame.insetBy(dx: -4, dy: -4))
-        }
+    /// Selection and drop-target changes: the ring moves, a border changes; nothing is redrawn.
+    func update(content: OverviewContent) { view.apply(content, scale: panel.backingScaleFactor) }
+
+    /// Shows the window once, invisibly, so WindowServer creates it and the blur now rather
+    /// than on the first real open.
+    func prewarm() {
+        guard !panel.isVisible else { return }
+        panel.alphaValue = 0
+        panel.orderFrontRegardless()
+        panel.displayIfNeeded()
+        panel.orderOut(nil)
+        panel.alphaValue = 1
     }
 
     /// Bumped by every show / hide / finish so an old animation's completion can't hide a
@@ -567,18 +589,50 @@ private final class OverviewPanel {
     }
 }
 
+/// One display's overview, built from layers so the GPU does the work:
+/// - the tint is the view layer's background colour (no full-screen CPU drawing, no
+///   full-screen backing image);
+/// - each card is a layer with a corner radius, a border and a shadow from a `shadowPath`
+///   (GPU shadow), holding one image of its text and icons — rendered once per card content
+///   and cached, so an unchanged card is never redrawn;
+/// - the selection ring is its own layer that moves.
+/// Layer coordinates are bottom-left; the model's frames are top-left, so y is flipped here.
 @MainActor
 private final class OverviewView: NSView {
     unowned let controller: OverviewController
-    var content: OverviewContent?
+    private(set) var content: OverviewContent?
+
+    private let header = CALayer()
+    private var headerKey: String?
+    private var cardLayers: [CALayer] = []          // card (background, border, shadow)
+    private var imageLayers: [CALayer] = []         // its text + icons
+    private let ring = CAShapeLayer()
+    /// Rendered card images by content (pruned to the cards currently shown).
+    private var images: [CardKey: CGImage] = [:]
+    private var imageKeys: [CardKey?] = []
+
+    private static let tint = CGColor(red: 0.03, green: 0.035, blue: 0.05, alpha: 0.55)
+    private static let activeFill = CGColor(red: 0.10, green: 0.16, blue: 0.28, alpha: 0.92)
+    private static let fill = CGColor(red: 0.11, green: 0.115, blue: 0.14, alpha: 0.92)
+    private static let green = CGColor(red: 0.36, green: 0.86, blue: 0.52, alpha: 1)
+    private static let blue = CGColor(red: 0.35, green: 0.6, blue: 1, alpha: 0.95)
+    private static let faint = CGColor(gray: 1, alpha: 0.12)
 
     init(controller: OverviewController) {
         self.controller = controller
         super.init(frame: .zero)
+        wantsLayer = true
+        layerContentsRedrawPolicy = .never
+        header.anchorPoint = .zero
+        ring.fillColor = nil
+        ring.lineWidth = 2.5
+        ring.anchorPoint = .zero
+        ring.isHidden = true
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    override var isFlipped: Bool { true }
+    override var wantsUpdateLayer: Bool { true }
+    override func updateLayer() { layer?.backgroundColor = Self.tint }
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
@@ -592,53 +646,148 @@ private final class OverviewView: NSView {
     /// Cursor in AX coordinates, valid across displays even mid-drag.
     static func axMouse() -> CGPoint { AutoFocusManager.cursor() }
 
-    /// The selection ring: a row, or the whole card when row is 0.
-    static func selectionRect(_ s: OverviewContent.SelectionMark, in c: OverviewContent) -> NSRect? {
+    // MARK: Layers
+
+    func apply(_ c: OverviewContent, scale: CGFloat) {
+        content = c
+        guard let root = layer else { return }
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        root.backgroundColor = Self.tint
+        let H = bounds.height
+        func flip(_ r: CGRect) -> CGRect { CGRect(x: r.minX, y: H - r.maxY, width: r.width, height: r.height) }
+
+        // Header: display name + hint, rendered when the name or width changes.
+        let hRect = CGRect(x: 44, y: 34, width: max(0, bounds.width - 88), height: 34)
+        let hKey = "\(c.name)|\(Int(hRect.width))|\(scale)"
+        if header.superlayer == nil { root.addSublayer(header) }
+        if hKey != headerKey, let img = Self.renderHeader(c.name, size: hRect.size, scale: scale) {
+            header.contents = img
+            header.contentsScale = scale
+            headerKey = hKey
+        }
+        header.frame = flip(hRect)
+
+        // Cards.
+        while cardLayers.count < c.cards.count {
+            let card = CALayer()
+            card.cornerRadius = 16
+            card.shadowColor = .black
+            card.shadowOpacity = 0.45
+            card.shadowRadius = 8
+            card.shadowOffset = CGSize(width: 0, height: -3)
+            let img = CALayer()
+            img.anchorPoint = .zero
+            card.addSublayer(img)
+            root.insertSublayer(card, below: ring)
+            cardLayers.append(card)
+            imageLayers.append(img)
+            imageKeys.append(nil)
+        }
+        if ring.superlayer == nil { root.addSublayer(ring) }
+        for i in c.cards.count..<cardLayers.count { cardLayers[i].isHidden = true }
+
+        var used = Set<CardKey>()
+        for (i, card) in c.cards.enumerated() {
+            let l = cardLayers[i]
+            l.isHidden = false
+            let f = flip(card.frame)
+            if l.frame != f {
+                l.frame = f
+                l.shadowPath = CGPath(roundedRect: CGRect(origin: .zero, size: f.size), cornerWidth: 16, cornerHeight: 16, transform: nil)
+            }
+            l.backgroundColor = card.card.isActive ? Self.activeFill : Self.fill
+            if card.isDropTarget { l.borderColor = Self.green; l.borderWidth = 2.5 }
+            else if card.card.isActive { l.borderColor = Self.blue; l.borderWidth = 2 }
+            else { l.borderColor = Self.faint; l.borderWidth = 1 }
+
+            let key = CardKey(card, layout: c.layout, scale: scale)
+            used.insert(key)
+            if imageKeys[i] != key {
+                let img = images[key] ?? Self.renderCard(card, layout: c.layout, scale: scale)
+                images[key] = img
+                imageLayers[i].contents = img
+                imageLayers[i].contentsScale = scale
+                imageKeys[i] = key
+            }
+            imageLayers[i].frame = CGRect(origin: .zero, size: f.size)
+        }
+        images = images.filter { used.contains($0.key) }
+
+        // Selection ring.
+        if let s = c.selection, let r = Self.selectionRect(s, in: c) {
+            let f = flip(r)
+            ring.isHidden = false
+            ring.strokeColor = s.carrying ? Self.green : CGColor(gray: 1, alpha: 0.95)
+            if ring.frame.size != f.size {
+                ring.path = CGPath(roundedRect: CGRect(origin: .zero, size: f.size), cornerWidth: 11, cornerHeight: 11, transform: nil)
+            }
+            ring.frame = f
+        } else {
+            ring.isHidden = true
+        }
+        CATransaction.commit()
+    }
+
+    /// The selection ring: a row, or the whole card when row is 0 (top-left coordinates).
+    static func selectionRect(_ s: OverviewContent.SelectionMark, in c: OverviewContent) -> CGRect? {
         guard s.card < c.cards.count else { return nil }
         let f = c.cards[s.card].frame
         return s.row > 0
-            ? NSRect(x: f.minX + 7, y: f.minY + c.layout.rowsTop + CGFloat(s.row - 1) * c.layout.rowHeight - 3,
+            ? CGRect(x: f.minX + 7, y: f.minY + c.layout.rowsTop + CGFloat(s.row - 1) * c.layout.rowHeight - 3,
                      width: f.width - 14, height: c.layout.rowHeight + 2)
             : f.insetBy(dx: 3, dy: 3)
     }
 
-    override func draw(_ dirtyRect: NSRect) {
-        guard let c = content else { return }
-        NSColor(red: 0.03, green: 0.035, blue: 0.05, alpha: 0.55).setFill()
-        dirtyRect.fill()
+    // MARK: Rendering (into card-sized bitmaps)
 
-        // Header: display name + hint.
-        let header = NSMutableAttributedString(string: c.name + "   ", attributes: [
-            .font: NSFont.systemFont(ofSize: 22, weight: .bold), .foregroundColor: NSColor.white])
-        header.append(NSAttributedString(string: "click / ↩ go · drag, or hold Space + arrows, to move a window · Esc close", attributes: [
-            .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor(white: 1, alpha: 0.55)]))
-        header.draw(with: NSRect(x: 44, y: 34, width: bounds.width - 88, height: 34), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+    /// What a card image depends on.
+    struct CardKey: Hashable {
+        let w: Int, h: Int, scale: Int
+        let workspace: Int, isPlus: Bool, isActive: Bool, count: Int, more: Int
+        let rows: [String]
+        let rowsTop: Int, rowHeight: Int
+        init(_ c: OverviewContent.CardContent, layout: OverviewModel.Layout, scale: CGFloat) {
+            w = Int(c.frame.width); h = Int(c.frame.height); self.scale = Int(scale * 100)
+            workspace = c.card.workspace; isPlus = c.card.isPlus; isActive = c.card.isActive
+            count = c.card.windows.count; more = c.more
+            rows = c.rows.map { "\($0.id)\u{1}\($0.appName)\u{1}\($0.title)" }
+            rowsTop = Int(layout.rowsTop); rowHeight = Int(layout.rowHeight)
+        }
+    }
 
-        for (ci, card) in c.cards.enumerated() {
-            let f = card.frame
-            // Only cards the dirty area touches (with room for the shadow): a selection move
-            // repaints one or two cards, not every card and its shadow.
-            guard f.insetBy(dx: -24, dy: -24).intersects(dirtyRect) else { continue }
-            let path = NSBezierPath(roundedRect: f, xRadius: 16, yRadius: 16)
-            NSGraphicsContext.saveGraphicsState()
-            let shadow = NSShadow()
-            shadow.shadowBlurRadius = 16
-            shadow.shadowOffset = NSSize(width: 0, height: -3)
-            shadow.shadowColor = NSColor(white: 0, alpha: 0.45)
-            shadow.set()
-            (card.card.isActive ? NSColor(red: 0.10, green: 0.16, blue: 0.28, alpha: 0.92)
-                                : NSColor(red: 0.11, green: 0.115, blue: 0.14, alpha: 0.92)).setFill()
-            path.fill()
-            NSGraphicsContext.restoreGraphicsState()
-            if card.isDropTarget {
-                NSColor(red: 0.36, green: 0.86, blue: 0.52, alpha: 1).setStroke(); path.lineWidth = 2.5
-            } else if card.card.isActive {
-                NSColor(red: 0.35, green: 0.6, blue: 1, alpha: 0.95).setStroke(); path.lineWidth = 2
-            } else {
-                NSColor(white: 1, alpha: 0.12).setStroke(); path.lineWidth = 1
-            }
-            path.stroke()
+    /// Draws with a flipped (top-left) graphics context into a bitmap of `size` points.
+    private static func render(size: CGSize, scale: CGFloat, _ draw: () -> Void) -> CGImage? {
+        let pw = Int((size.width * scale).rounded()), ph = Int((size.height * scale).rounded())
+        guard pw > 0, ph > 0,
+              let ctx = CGContext(data: nil, width: pw, height: ph, bitsPerComponent: 8, bytesPerRow: 0,
+                                  space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                  bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue)
+        else { return nil }
+        ctx.scaleBy(x: scale, y: scale)
+        ctx.translateBy(x: 0, y: size.height)
+        ctx.scaleBy(x: 1, y: -1)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(cgContext: ctx, flipped: true)
+        draw()
+        NSGraphicsContext.restoreGraphicsState()
+        return ctx.makeImage()
+    }
 
+    private static func renderHeader(_ name: String, size: CGSize, scale: CGFloat) -> CGImage? {
+        render(size: size, scale: scale) {
+            let header = NSMutableAttributedString(string: name + "   ", attributes: [
+                .font: NSFont.systemFont(ofSize: 22, weight: .bold), .foregroundColor: NSColor.white])
+            header.append(NSAttributedString(string: "click / ↩ go · drag, or hold Space + arrows, to move a window · Esc close", attributes: [
+                .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor(white: 1, alpha: 0.55)]))
+            header.draw(with: NSRect(origin: .zero, size: size), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        }
+    }
+
+    private static func renderCard(_ card: OverviewContent.CardContent, layout: OverviewModel.Layout, scale: CGFloat) -> CGImage? {
+        let size = card.frame.size
+        return render(size: size, scale: scale) {
+            let w = size.width
             let n = card.card.windows.count
             let head = NSMutableAttributedString(string: (card.card.isPlus ? "+" : "\(card.card.workspace)") + "   ", attributes: [
                 .font: NSFont.systemFont(ofSize: 24, weight: .bold), .foregroundColor: NSColor.white])
@@ -646,15 +795,14 @@ private final class OverviewView: NSView {
                 : "\(n) window\(n == 1 ? "" : "s")" + (card.card.isActive ? "  ·  active" : "")
             head.append(NSAttributedString(string: sub, attributes: [
                 .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor(white: 1, alpha: 0.6)]))
-            head.draw(with: NSRect(x: f.minX + 18, y: f.minY + 12, width: f.width - 36, height: 34),
-                      options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            head.draw(with: NSRect(x: 18, y: 12, width: w - 36, height: 34), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
 
-            var ry = f.minY + c.layout.rowsTop
+            var ry = layout.rowsTop
             for row in card.rows {
-                let rr = NSRect(x: f.minX + 10, y: ry, width: f.width - 20, height: c.layout.rowHeight - 4)
+                let rr = NSRect(x: 10, y: ry, width: w - 20, height: layout.rowHeight - 4)
                 NSColor(white: 1, alpha: 0.05).setFill()
                 NSBezierPath(roundedRect: rr, xRadius: 9, yRadius: 9).fill()
-                row.icon?.draw(in: NSRect(x: f.minX + 16, y: ry + 4, width: 28, height: 28), from: .zero,
+                row.icon?.draw(in: NSRect(x: 16, y: ry + 4, width: 28, height: 28), from: .zero,
                                operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
                 let t = NSMutableAttributedString(string: row.appName + "  ", attributes: [
                     .font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: NSColor.white])
@@ -662,20 +810,12 @@ private final class OverviewView: NSView {
                     t.append(NSAttributedString(string: row.title, attributes: [
                         .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor(white: 1, alpha: 0.6)]))
                 }
-                t.draw(with: NSRect(x: f.minX + 52, y: ry + 9, width: f.width - 70, height: 20),
-                       options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
-                ry += c.layout.rowHeight
+                t.draw(with: NSRect(x: 52, y: ry + 9, width: w - 70, height: 20), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+                ry += layout.rowHeight
             }
             if card.more > 0 {
-                ("+\(card.more) more" as NSString).draw(in: NSRect(x: f.minX + 18, y: ry + 10, width: f.width - 36, height: 20), withAttributes: [
+                ("+\(card.more) more" as NSString).draw(in: NSRect(x: 18, y: ry + 10, width: w - 36, height: 20), withAttributes: [
                     .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor(white: 1, alpha: 0.5)])
-            }
-
-            if let s = c.selection, s.card == ci, let r = Self.selectionRect(s, in: c) {
-                let p = NSBezierPath(roundedRect: r, xRadius: 11, yRadius: 11)
-                (s.carrying ? NSColor(red: 0.36, green: 0.86, blue: 0.52, alpha: 1) : NSColor(white: 1, alpha: 0.95)).setStroke()
-                p.lineWidth = 2.5
-                p.stroke()
             }
         }
     }

@@ -136,6 +136,7 @@ final class GestureController {
         interactive = .none
         guard s.fingers == 3, s.axis == .vertical else { return }
         let up = s.displacement > 0
+        dock.resync()                     // one AX read: the Dock's state is known before it's needed
         if dock.isAppExposeOpen {
             interactive = .appExposeClose(sign: up ? 1 : -1)          // ↑, or ↓ again, dismisses it
         } else if dock.isBusy {
@@ -155,8 +156,23 @@ final class GestureController {
     }
 
     private func crossed(_ s: SwipeSample, at t: Double) {
-        guard s.fingers == 4, s.axis == .horizontal, config.trigger == .swipe else { return }
-        stepWorkspace(s, at: t)
+        guard config.trigger == .swipe else { return }               // `lift`: everything waits for the lift
+        if s.fingers == 4, s.axis == .horizontal { stepWorkspace(s, at: t); return }
+        // App Exposé opens / closes as soon as the swipe reaches its distance, like the
+        // workspace swipe, instead of after the rest of the swipe and the lift.
+        guard s.fingers == 3, s.axis == .vertical else { return }
+        switch interactive {
+        case .appExposeOpen where s.displacement < 0:
+            if dock.openAppExpose(log: { [weak self] in self?.note($0) }) { note("→ App Exposé") }
+            interactive = .ignored
+            perf.record("15 gesture: swipe → App Exposé requested", since: t)
+        case let .appExposeClose(sign) where sign * s.displacement > 0:
+            if dock.closeAppExpose(log: { [weak self] in self?.note($0) }) { note("→ close App Exposé") }
+            interactive = .ignored
+            perf.record("15 gesture: swipe → App Exposé requested", since: t)
+        default:
+            break
+        }
     }
 
     private func ended(_ s: SwipeSample, at t: Double) {

@@ -74,8 +74,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // Shortcuts are registered only once Accessibility is allowed, so Hammerspoon keeps
         // them until Monarch can really act on them (see announce()).
-        permissions.onGranted = { [unowned self] in engine.start(); applyBindings() }
-        if permissions.isTrusted { engine.start(); applyBindings() } else { permissions.prompt() }
+        permissions.onGranted = { [unowned self] in engine.start(); applyBindings(); prewarmOverview() }
+        if permissions.isTrusted { engine.start(); applyBindings(); prewarmOverview() } else { permissions.prompt() }
 
         // Hammerspoon asks after a config reload; answer with the current state.
         queryToken = DistributedNotificationCenter.default().addObserver(
@@ -115,6 +115,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return 0 }
         let t = info.kp_proc.p_starttime
         return Date().timeIntervalSince1970 - (Double(t.tv_sec) + Double(t.tv_usec) / 1_000_000)
+    }
+
+    /// After discovery has settled: overview panels, windows and card images ready ahead of time.
+    private func prewarmOverview() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) { [weak self] in self?.overview.prewarm() }
     }
 
     // MARK: Configuration

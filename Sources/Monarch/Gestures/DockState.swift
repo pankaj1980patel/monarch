@@ -164,7 +164,8 @@ final class DockState {
             }
         }
         pendingVerify = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+        // The Dock reports App Exposé opening within a frame or two: check after 0.25 s.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
         return true
     }
 
