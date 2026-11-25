@@ -7,6 +7,16 @@ A lightweight native macOS window manager (Swift 6 / AppKit, menu bar app) that 
 - No screenshots, no Screen Recording permission.
 - Private APIs (MultitouchSupport, SkyLight focus, Dock notifications) are loaded at runtime and checked; if missing, the feature switches off.
 
+## Download
+
+**[Download the latest release](https://github.com/pankaj1980patel/monarch/releases/latest)**. Current version: [Monarch 0.1.0](https://github.com/pankaj1980patel/monarch/releases/download/v0.1.0/Monarch-0.1.0.zip).
+
+1. Unzip it and move `Monarch.app` to `/Applications` or `~/Applications`.
+2. The app isn't notarized, so the first time, right-click it and choose **Open**. Alternatively, run `xattr -dr com.apple.quarantine /path/to/Monarch.app`.
+3. Allow Monarch in System Settings → Privacy & Security → Accessibility.
+
+Requires macOS 15 or later.
+
 ## Build
 
 Requires macOS 15+ and the Swift 6 toolchain (Command Line Tools are enough).
