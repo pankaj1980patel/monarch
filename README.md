@@ -13,7 +13,7 @@ A lightweight native macOS window manager (Swift 6 / AppKit, menu bar app) that 
 
 ## Download
 
-**[Download the latest release](https://github.com/pankaj1980patel/monarch/releases/latest)**. Current version: [Monarch 0.1.0](https://github.com/pankaj1980patel/monarch/releases/download/v0.1.0/Monarch-0.1.0.zip).
+**[Download the latest release](https://github.com/pankaj1980patel/monarch/releases/latest)**. Current version: [Monarch 0.1.1](https://github.com/pankaj1980patel/monarch/releases/download/v0.1.1/Monarch-0.1.1.zip).
 
 1. Unzip it and move `Monarch.app` to `/Applications` or `~/Applications`.
 2. The app isn't notarized, so the first time, right-click it and choose **Open**. Alternatively, run `xattr -dr com.apple.quarantine /path/to/Monarch.app`.

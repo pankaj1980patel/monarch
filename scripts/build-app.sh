@@ -13,7 +13,7 @@ set -euo pipefail
 ROOT=${0:A:h:h}
 APP_NAME=Monarch
 BUNDLE_ID=dev.monarch.Monarch
-VERSION=0.1.0
+VERSION=0.1.1
 DEST="$HOME/Applications/$APP_NAME.app"
 SUPPORT="$HOME/Library/Application Support/Monarch"
 KEYCHAIN="$SUPPORT/signing.keychain-db"
