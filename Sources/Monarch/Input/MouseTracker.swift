@@ -29,6 +29,8 @@ final class MouseTracker: @unchecked Sendable {
     var onFailure: (@Sendable () -> Void)?
 
     private var tap: CFMachPort?
+    /// Hover checks run here, not on the main thread; only a real hover hops to main.
+    private let hoverQueue = DispatchQueue(label: "monarch.mouse.hover", qos: .userInitiated)
     private var thread: Thread?
     private let ready = DispatchSemaphore(value: 0)
 
@@ -124,7 +126,7 @@ final class MouseTracker: @unchecked Sendable {
 
     /// Fires `onHover` once the cursor has been still for `hoverPause`; re-arms itself while it moves.
     private func scheduleHoverCheck(after delay: Double) {
-        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [self] in
+        hoverQueue.asyncAfter(deadline: .now() + delay, flags: []) { [self] in
             let remaining: Double? = state.withLock { s in
                 guard s.hoverPending, s.hoverEnabled else { s.hoverPending = false; return nil }
                 let still = PerformanceMonitor.now() - s.lastMove
@@ -132,7 +134,8 @@ final class MouseTracker: @unchecked Sendable {
                 return Self.hoverPause - still
             }
             guard let remaining else { return }
-            if remaining == 0 { onHover?() } else { scheduleHoverCheck(after: remaining) }
+            if remaining == 0 { if let f = onHover { DispatchQueue.main.async { f() } } }
+            else { scheduleHoverCheck(after: remaining) }
         }
     }
 }

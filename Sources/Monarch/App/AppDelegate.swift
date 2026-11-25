@@ -28,7 +28,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var configErrors: [String] = []
     private var bindingErrors: [String] = []
     private var statusItem: NSStatusItem?
-    private let launchedAt = PerformanceMonitor.now()
+    private var statusText: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Bound every Accessibility call this process makes: a hung app costs at most this long.
@@ -94,14 +94,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         migrateLoginItem()
 
         setUpStatusItem()
-        perf.stats.record("0 launch → ready", ms: (PerformanceMonitor.now() - launchedAt) * 1000)
+        // From the moment the process started (not when this object was made). Window discovery
+        // carries on in the background after this, so the name says so.
+        perf.stats.record("0 process start → app ready (discovery continues)", ms: Self.secondsSinceProcessStart() * 1000)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         hotkeys.unregisterAll()
         SystemSwitcher.setSystemEnabled(true)      // give ⌘Tab back to macOS
         announce(forceOff: true)
+        workspaces.flushSave()
         engine.stop()
+    }
+
+    /// Wall-clock time since the kernel started this process.
+    private static func secondsSinceProcessStart() -> Double {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()]
+        guard sysctl(&mib, 4, &info, &size, nil, 0) == 0 else { return 0 }
+        let t = info.kp_proc.p_starttime
+        return Date().timeIntervalSince1970 - (Double(t.tv_sec) + Double(t.tv_usec) / 1_000_000)
     }
 
     // MARK: Configuration
@@ -176,12 +189,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// brackets, external display first, e.g. "[1] 3  │  [2]".
     private func updateStatusTitle() {
         guard let button = statusItem?.button else { return }
-        guard workspaces.isActive else { button.attributedTitle = NSAttributedString(); return }
         let order = displays.displays.sorted { !$0.isBuiltin && $1.isBuiltin }.map(\.uuid)
+        let text = workspaces.isActive ? " " + workspaces.state.menuTitle(displayOrder: order) : ""
+        guard text != statusText else { return }           // the menu bar redraws only on a real change
+        statusText = text
         button.imagePosition = .imageLeading
         button.attributedTitle = NSAttributedString(
-            string: " " + workspaces.state.menuTitle(displayOrder: order),
-            attributes: [.font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)])
+            string: text, attributes: [.font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)])
     }
 
     private func setUpStatusItem() {

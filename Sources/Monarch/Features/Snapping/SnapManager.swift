@@ -16,6 +16,9 @@ final class SnapManager {
         self.engine = engine
         self.displays = displays
         self.perf = perf
+        // Undo and fill frames are per window: drop them when the window closes.
+        let history = self.history
+        engine.onRemove { id in history.forget(id) }
     }
 
     /// `eventTime` is the key press's timestamp, so the recorded time covers the whole path.

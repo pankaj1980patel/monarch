@@ -41,7 +41,9 @@ final class OverviewController {
     private var gestureActive = false
     private var guardUntil: Double = 0
     private var refreshWork: DispatchWorkItem?
-    private var iconCache: [pid_t: NSImage] = [:]
+    /// Bumped whenever the cards themselves change (rebuild); selection-only updates keep it,
+    /// so panels redraw just the selection instead of the whole screen.
+    private var contentVersion = 0
     /// A three-finger swipe is driving the overview (nil otherwise). `opening`: it started closed.
     private var interaction: (opening: Bool, progress: Double)?
     var isInteracting: Bool { interaction != nil }
@@ -164,6 +166,7 @@ final class OverviewController {
     private func rebuild(initialSelection: Bool) {
         let state = workspaces.state
         let list = displays.displays.sorted { ($0.frame.minY, $0.frame.minX) < ($1.frame.minY, $1.frame.minX) }
+        let z = AutoFocusManager.zOrder()                        // one window-list fetch for all displays
         var built: [Screen] = []
         for d in list {
             let parked = state.hidden.compactMap { k, e -> (id: UInt32, ws: Int, z: Int)? in
@@ -171,7 +174,7 @@ final class OverviewController {
                 return (id, e.ws, e.z)
             }
             let cards = OverviewModel.cards(active: state.activeWorkspace(d.uuid),
-                                            visible: workspaces.visibleWindows(on: d), parked: parked)
+                                            visible: workspaces.visibleWindows(on: d, zOrder: z), parked: parked)
             let layout = OverviewModel.layout(cardCount: cards.count, size: d.frame.size)
             let shown = cards.map { $0.windows.count <= layout.maxRows ? $0.windows.count : max(0, layout.maxRows - 1) }
             let panel = panels[d.id] ?? OverviewPanel(controller: self)
@@ -182,6 +185,7 @@ final class OverviewController {
         let ids = Set(list.map(\.id))
         for (id, p) in panels where !ids.contains(id) { p.hide(); panels.removeValue(forKey: id) }
         screens = built
+        contentVersion &+= 1
 
         if let keep = keepWindow, let sel = find(keep) { selection = sel; keepWindow = nil }
         else if initialSelection || !isValid(selection) { selection = defaultSelection() }
@@ -196,8 +200,8 @@ final class OverviewController {
         let cards = s.cards.enumerated().map { ci, card -> OverviewContent.CardContent in
             let rows = card.windows.prefix(s.shownRows[ci]).map { id -> OverviewContent.Row in
                 let w = engine.windows[id]
-                let app = w.flatMap { NSRunningApplication(processIdentifier: $0.pid) }
-                return .init(id: id, appName: app?.localizedName ?? "?", title: w?.title ?? "", icon: icon(w?.pid))
+                let name = w.flatMap { engine.apps[$0.pid]?.name } ?? "?"     // stored when the app was tracked
+                return .init(id: id, appName: name, title: w?.title ?? "", icon: icon(w?.pid))
             }
             return .init(frame: s.layout.cardFrames[ci], card: card, rows: rows,
                          more: card.windows.count - s.shownRows[ci],
@@ -208,16 +212,11 @@ final class OverviewController {
             let carrying = grabbed != nil && selection.row > 0
             sel = .init(card: selection.card, row: selection.row, carrying: carrying)
         }
-        return OverviewContent(name: s.display.name, cards: cards, layout: s.layout, selection: sel)
+        return OverviewContent(name: s.display.name, cards: cards, layout: s.layout, selection: sel, version: contentVersion)
     }
 
-    private func icon(_ pid: pid_t?) -> NSImage? {
-        guard let pid else { return nil }
-        if let i = iconCache[pid] { return i }
-        let i = NSRunningApplication(processIdentifier: pid)?.icon
-        iconCache[pid] = i
-        return i
-    }
+    /// Shared cache of small bitmaps at the row icon size (dropped when the app quits).
+    private func icon(_ pid: pid_t?) -> NSImage? { pid.flatMap { AppIcons.icon($0, points: 28) } }
 
     private func isValid(_ s: OverviewModel.Selection) -> Bool {
         s.screen < screens.count && s.card < screens[s.screen].cards.count && s.row <= screens[s.screen].shownRows[s.card]
@@ -404,11 +403,13 @@ final class OverviewController {
 struct OverviewContent {
     struct Row { let id: CGWindowID; let appName: String; let title: String; let icon: NSImage? }
     struct CardContent { let frame: CGRect; let card: OverviewModel.Card; let rows: [Row]; let more: Int; let isDropTarget: Bool }
-    struct SelectionMark { let card: Int; let row: Int; let carrying: Bool }
+    struct SelectionMark: Equatable { let card: Int; let row: Int; let carrying: Bool }
     let name: String
     let cards: [CardContent]
     let layout: OverviewModel.Layout
     let selection: SelectionMark?
+    /// Same version = same cards; only the selection or drop target can differ.
+    let version: Int
 }
 
 /// Borderless panels can't normally become key; this one can, without activating Monarch.
@@ -437,6 +438,9 @@ private final class OverviewPanel {
         blur.blendingMode = .behindWindow
         blur.state = .active
         blur.appearance = NSAppearance(named: .darkAqua)
+        // Layer-backed from the start: switching it on during the first show (the interactive
+        // zoom needs the layer) made the very first open after launch come up blank.
+        blur.wantsLayer = true
         view = OverviewView(controller: controller)
         view.autoresizingMask = [.width, .height]
         blur.addSubview(view)
@@ -445,15 +449,32 @@ private final class OverviewPanel {
 
     func load(display: Display, content: OverviewContent) {
         let screen = SwitcherController.cocoaScreen(for: display.id)
-        panel.setFrame(screen?.frame ?? .zero, display: false)
-        view.frame = panel.contentView?.bounds ?? .zero
+        let frame = screen?.frame ?? .zero
+        if panel.frame != frame {                          // refreshes while open: usually unchanged
+            panel.setFrame(frame, display: false)
+            view.frame = panel.contentView?.bounds ?? .zero
+        }
         view.content = content
         view.needsDisplay = true
     }
 
+    /// Selection / drop-target changes redraw only the rectangles involved; a display where
+    /// nothing changed doesn't redraw at all. New cards redraw everything.
     func update(content: OverviewContent) {
+        guard let old = view.content, old.version == content.version, old.cards.count == content.cards.count else {
+            view.content = content
+            view.needsDisplay = true
+            return
+        }
         view.content = content
-        view.needsDisplay = true
+        if old.selection != content.selection {
+            for s in [old.selection, content.selection] {
+                if let s, let r = OverviewView.selectionRect(s, in: content) { view.setNeedsDisplay(r.insetBy(dx: -4, dy: -4)) }
+            }
+        }
+        for (a, b) in zip(old.cards, content.cards) where a.isDropTarget != b.isDropTarget {
+            view.setNeedsDisplay(b.frame.insetBy(dx: -4, dy: -4))
+        }
     }
 
     /// Bumped by every show / hide / finish so an old animation's completion can't hide a
@@ -571,10 +592,20 @@ private final class OverviewView: NSView {
     /// Cursor in AX coordinates, valid across displays even mid-drag.
     static func axMouse() -> CGPoint { AutoFocusManager.cursor() }
 
+    /// The selection ring: a row, or the whole card when row is 0.
+    static func selectionRect(_ s: OverviewContent.SelectionMark, in c: OverviewContent) -> NSRect? {
+        guard s.card < c.cards.count else { return nil }
+        let f = c.cards[s.card].frame
+        return s.row > 0
+            ? NSRect(x: f.minX + 7, y: f.minY + c.layout.rowsTop + CGFloat(s.row - 1) * c.layout.rowHeight - 3,
+                     width: f.width - 14, height: c.layout.rowHeight + 2)
+            : f.insetBy(dx: 3, dy: 3)
+    }
+
     override func draw(_ dirtyRect: NSRect) {
         guard let c = content else { return }
         NSColor(red: 0.03, green: 0.035, blue: 0.05, alpha: 0.55).setFill()
-        bounds.fill()
+        dirtyRect.fill()
 
         // Header: display name + hint.
         let header = NSMutableAttributedString(string: c.name + "   ", attributes: [
@@ -585,6 +616,9 @@ private final class OverviewView: NSView {
 
         for (ci, card) in c.cards.enumerated() {
             let f = card.frame
+            // Only cards the dirty area touches (with room for the shadow): a selection move
+            // repaints one or two cards, not every card and its shadow.
+            guard f.insetBy(dx: -24, dy: -24).intersects(dirtyRect) else { continue }
             let path = NSBezierPath(roundedRect: f, xRadius: 16, yRadius: 16)
             NSGraphicsContext.saveGraphicsState()
             let shadow = NSShadow()
@@ -637,11 +671,7 @@ private final class OverviewView: NSView {
                     .font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor(white: 1, alpha: 0.5)])
             }
 
-            if let s = c.selection, s.card == ci {
-                let r = s.row > 0
-                    ? NSRect(x: f.minX + 7, y: f.minY + c.layout.rowsTop + CGFloat(s.row - 1) * c.layout.rowHeight - 3,
-                             width: f.width - 14, height: c.layout.rowHeight + 2)
-                    : f.insetBy(dx: 3, dy: 3)
+            if let s = c.selection, s.card == ci, let r = Self.selectionRect(s, in: c) {
                 let p = NSBezierPath(roundedRect: r, xRadius: 11, yRadius: 11)
                 (s.carrying ? NSColor(red: 0.36, green: 0.86, blue: 0.52, alpha: 1) : NSColor(white: 1, alpha: 0.95)).setStroke()
                 p.lineWidth = 2.5

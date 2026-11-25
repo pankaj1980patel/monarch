@@ -18,6 +18,13 @@ public final class PerfStats: Sendable {
         var next = 0
         var count = 0
         var last: Double = 0
+
+        mutating func record(_ ms: Double) {
+            values[next] = ms
+            next = (next + 1) % PerfStats.capacity
+            count = min(count + 1, PerfStats.capacity)
+            last = ms
+        }
     }
     private let rings = Mutex([String: Ring]())
 
@@ -26,12 +33,9 @@ public final class PerfStats: Sendable {
     /// Records one duration in milliseconds.
     public func record(_ metric: String, ms: Double) {
         rings.withLock { r in
-            var ring = r[metric] ?? Ring()
-            ring.values[ring.next] = ms
-            ring.next = (ring.next + 1) % Self.capacity
-            ring.count = min(ring.count + 1, Self.capacity)
-            ring.last = ms
-            r[metric] = ring
+            // In place through the dictionary's default subscript: copying the ring out and
+            // back would copy its 256-value array on every call.
+            r[metric, default: Ring()].record(ms)
         }
     }
 

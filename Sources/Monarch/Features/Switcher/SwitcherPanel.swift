@@ -87,6 +87,20 @@ final class SwitcherPanel {
 
     func select(_ index: Int) { view.select(index) }
 
+    /// Draws the tiles now (while hidden), so showing it later costs no drawing.
+    func drawNow() { view.displayIfNeeded() }
+
+    /// Shows the panel once, invisibly, so the first real ⌘Tab doesn't pay for macOS creating
+    /// the window's backing and the glass effect.
+    func prewarm() {
+        panel.alphaValue = 0
+        panel.setFrame(NSRect(x: 0, y: 0, width: 200, height: 100), display: false)
+        panel.orderFrontRegardless()
+        panel.displayIfNeeded()
+        panel.orderOut(nil)
+        panel.alphaValue = 1
+    }
+
     func show() { panel.orderFrontRegardless() }
     func hide() { panel.orderOut(nil) }
 
@@ -119,10 +133,25 @@ private final class SwitcherView: NSView {
         updateTrackingAreas()
     }
 
+    /// Repaints only the old and new tile and the footer, not every tile and its shadow.
     func select(_ i: Int) {
         guard i != selected else { return }
+        let old = selected
         selected = i
-        needsDisplay = true
+        setNeedsDisplay(column(old))
+        setNeedsDisplay(column(i))
+        setNeedsDisplay(footerRect)
+    }
+
+    /// Tile `i` from the top of the selection highlight to the bottom of its title.
+    private func column(_ i: Int) -> NSRect {
+        let G = SwitcherPanel.G.self
+        return NSRect(x: G.pad + CGFloat(i) * cell - 2, y: G.pad + top - 8, width: cell + 4, height: tileH + 14)
+    }
+
+    private var footerRect: NSRect {
+        let G = SwitcherPanel.G.self
+        return NSRect(x: G.pad, y: G.pad + top + tileH + 8, width: bounds.width - G.pad * 2, height: G.footer)
     }
 
     override func updateTrackingAreas() {
@@ -168,19 +197,15 @@ private final class SwitcherView: NSView {
         NSColor(white: 1, alpha: 0.13).setFill(); selPath.fill()
         NSColor(white: 1, alpha: 0.22).setStroke(); selPath.lineWidth = 1; selPath.stroke()
 
-        for (i, item) in items.enumerated() {
+        for (i, item) in items.enumerated() where column(i).intersects(dirtyRect) {
             let cx = G.pad + CGFloat(i) * cell, iy = G.pad + top
             let ix = cx + (cell - iconSize) / 2
             let iconRect = NSRect(x: ix, y: iy + (cell - iconSize) / 2 - 2, width: iconSize, height: iconSize)
             if let icon = item.icon {
-                NSGraphicsContext.saveGraphicsState()
-                let shadow = NSShadow()
-                shadow.shadowBlurRadius = 10
-                shadow.shadowOffset = NSSize(width: 0, height: -4)
-                shadow.shadowColor = NSColor(white: 0, alpha: 0.4)
-                shadow.set()
-                icon.draw(in: iconRect, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
-                NSGraphicsContext.restoreGraphicsState()
+                // The shadow is baked into the cached bitmap (AppIcons): a plain image copy here.
+                let m = AppIcons.shadowMargin * (iconSize / SwitcherPanel.G.icon)
+                icon.draw(in: iconRect.insetBy(dx: -m, dy: -m), from: .zero, operation: .sourceOver, fraction: 1,
+                          respectFlipped: true, hints: nil)
             }
             let screenColor = item.onBuiltin ? G.macbook : G.monitor
             if top > 0 {                                                     // screen dot, top-right
@@ -200,11 +225,10 @@ private final class SwitcherView: NSView {
         }
 
         // Footer: app name, title, workspace.
+        guard footerRect.intersects(dirtyRect) else { return }
         let s = items[selected]
         let footer = NSMutableAttributedString()
-        let para = NSMutableParagraphStyle()
-        para.alignment = .center
-        para.lineBreakMode = .byTruncatingTail
+        let para = Self.paragraph(.center)
         footer.append(NSAttributedString(string: s.appName, attributes: [
             .font: NSFont.systemFont(ofSize: 13, weight: .bold), .foregroundColor: NSColor(white: 1, alpha: 0.98)]))
         if !s.title.isEmpty && s.title != s.appName {
@@ -225,14 +249,25 @@ private final class SwitcherView: NSView {
         if ring { NSColor(red: 0.08, green: 0.08, blue: 0.1, alpha: 0.9).setStroke(); p.lineWidth = 2; p.stroke() }
     }
 
+    /// Truncating paragraph styles, built once per alignment.
+    private static let paragraphs: [NSTextAlignment: NSParagraphStyle] = {
+        var out: [NSTextAlignment: NSParagraphStyle] = [:]
+        for a in [NSTextAlignment.left, .center, .right] {
+            let p = NSMutableParagraphStyle()
+            p.alignment = a
+            p.lineBreakMode = .byTruncatingTail
+            out[a] = p
+        }
+        return out
+    }()
+    private static func paragraph(_ a: NSTextAlignment) -> NSParagraphStyle { paragraphs[a] ?? paragraphs[.left]! }
+
+
     private func text(_ s: String, at r: NSRect, size: CGFloat, weight: NSFont.Weight, alpha: CGFloat, align: NSTextAlignment) {
-        let para = NSMutableParagraphStyle()
-        para.alignment = align
-        para.lineBreakMode = .byTruncatingTail
         (s as NSString).draw(with: r, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: [
             .font: NSFont.systemFont(ofSize: size, weight: weight),
             .foregroundColor: NSColor(white: 1, alpha: alpha),
-            .paragraphStyle: para,
+            .paragraphStyle: Self.paragraph(align),
         ])
     }
 }

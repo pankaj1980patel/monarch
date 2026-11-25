@@ -9,6 +9,13 @@ public enum SwitcherLogic {
     /// `include` filters (⌘` keeps only the current workspace of the mouse's screen).
     public static func order(focused: UInt32?, mru: [UInt32], zOrder: [UInt32], others: [UInt32],
                              include: (UInt32) -> Bool) -> [UInt32] {
+        order(focused: focused, mru: mru, zOrder: { zOrder }, others: others, include: include)
+    }
+
+    /// Same, with the stacking order fetched only if focused + recent windows don't fill the
+    /// list (it costs a WindowServer call; most presses never need it).
+    public static func order(focused: UInt32?, mru: [UInt32], zOrder: () -> [UInt32], others: [UInt32],
+                             include: (UInt32) -> Bool) -> [UInt32] {
         var out: [UInt32] = []
         var seen = Set<UInt32>()
         func add(_ id: UInt32) {
@@ -18,8 +25,8 @@ public enum SwitcherLogic {
         }
         if let focused { add(focused) }
         mru.forEach(add)
-        zOrder.forEach(add)
-        others.forEach(add)
+        if out.count < maxItems { zOrder().forEach(add) }
+        if out.count < maxItems { others.forEach(add) }
         return out
     }
 

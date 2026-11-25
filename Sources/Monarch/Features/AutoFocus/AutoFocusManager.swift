@@ -29,7 +29,12 @@ final class AutoFocusManager {
         self.perf = perf
         self.toast = toast
 
-        engine.onFocus { [unowned self] id in record(id) }
+        engine.onFocus { [unowned self] id in
+            // While a ⌘Tab pick is on its way, other windows macOS focuses in passing (e.g. when a
+            // workspace switch parks the focused app's windows) don't count as "recently used".
+            if let p = engine.pendingFocusID, p != id { return }
+            record(id)
+        }
         engine.onRemove { [unowned self] id in history.forget(window: id) }
         tracker.onCross = { id, p in MainActor.assumeIsolated { self.crossed(to: id, at: p) } }
         tracker.onHover = { MainActor.assumeIsolated { self.hovered() } }
@@ -47,14 +52,18 @@ final class AutoFocusManager {
         sameAppHover = hover
         self.active = active
         displaysChanged()
-        tracker.configure(cross: active && cross, hover: active && hover)
-        tapFailed = (active && (cross || hover)) && !tracker.isActive
     }
 
+    /// Also re-decides whether the mouse listener is needed: with one display there is no
+    /// crossing, so it runs only for hover focus (off by default) and costs nothing otherwise.
     func displaysChanged() {
         let list = displays.displays
         tracker.update(displays: list.map { ($0.id, $0.frame) }, cursor: Self.cursor())
         history.keepDisplays(Set(list.map(\.id)))
+        let cross = active && crossScreen && list.count > 1
+        let hover = active && sameAppHover
+        tracker.configure(cross: cross, hover: hover)
+        tapFailed = (cross || hover) && !tracker.isActive
     }
 
     // MARK: Actions (shortcuts)
@@ -82,6 +91,13 @@ final class AutoFocusManager {
     }
 
     // MARK: History
+
+    /// Monarch is focusing `id` itself (⌘Tab): it's the newest recent window right away,
+    /// not when macOS's notification arrives.
+    func noteFocusing(_ id: CGWindowID) {
+        engine.noteFocusing(id)
+        record(id)
+    }
 
     /// Every focus change, however it happened (click, app switch, ⌘Tab, our own focusing),
     /// becomes the "last used" window of the display it is on.
@@ -181,28 +197,17 @@ final class AutoFocusManager {
     }
 
     /// Cursor position in AX coordinates (top-left origin).
-    static func cursor() -> CGPoint { CGEvent(source: nil)?.location ?? .zero }
-
-    /// On-screen normal windows, front to back. One WindowServer call; used sparingly.
-    static func zOrder() -> [UInt32] {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
-                as? [[String: Any]] else { return [] }
-        return list.compactMap { info in
-            guard (info[kCGWindowLayer as String] as? Int) == 0 else { return nil }
-            return (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value
-        }
+    /// From NSEvent.mouseLocation (no event object created), flipped to AX coordinates.
+    static func cursor() -> CGPoint {
+        let p = NSEvent.mouseLocation
+        let primaryHeight = NSScreen.screens.first?.frame.height ?? 0
+        return CGPoint(x: p.x, y: primaryHeight - p.y)
     }
+
+    /// On-screen normal windows, front to back. One WindowServer call: fetch once per
+    /// operation and pass it down.
+    static func zOrder() -> [UInt32] { WindowList.zOrder() }
 
     /// The front-most normal window under `p`.
-    static func topWindow(at p: CGPoint) -> UInt32? {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
-                as? [[String: Any]] else { return nil }
-        for info in list {
-            guard (info[kCGWindowLayer as String] as? Int) == 0,
-                  let b = info[kCGWindowBounds as String] as? NSDictionary,
-                  let r = CGRect(dictionaryRepresentation: b as CFDictionary), r.contains(p) else { continue }
-            return (info[kCGWindowNumber as String] as? NSNumber)?.uint32Value
-        }
-        return nil
-    }
+    static func topWindow(at p: CGPoint) -> UInt32? { WindowList.topWindow(at: p) }
 }

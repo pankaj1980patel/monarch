@@ -7,8 +7,21 @@ import ApplicationServices
 final class PermissionsManager {
     var onGranted: (() -> Void)?
     private var token: NSObjectProtocol?
+    private var changeToken: NSObjectProtocol?
+    private var trusted = AXIsProcessTrusted()
 
-    var isTrusted: Bool { AXIsProcessTrusted() }
+    /// Asked on every hotkey, so cached; refreshed whenever macOS reports an Accessibility change.
+    var isTrusted: Bool { trusted }
+
+    init() {
+        changeToken = DistributedNotificationCenter.default().addObserver(
+            forName: NSNotification.Name("com.apple.accessibility.api"), object: nil, queue: .main
+        ) { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {     // the database updates just after
+                MainActor.assumeIsolated { self.trusted = AXIsProcessTrusted() }
+            }
+        }
+    }
 
     /// Shows the system prompt (System Settings → Privacy & Security → Accessibility).
     func prompt() {
@@ -36,7 +49,8 @@ final class PermissionsManager {
     }
 
     private func check() {
-        guard isTrusted else { return }
+        trusted = AXIsProcessTrusted()
+        guard trusted else { return }
         if let token { DistributedNotificationCenter.default().removeObserver(token) }
         token = nil
         onGranted?()

@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import Synchronization
 import MonarchCore
 
 /// What the window engine knows about one window. Kept on the main actor.
@@ -30,14 +31,17 @@ final class TrackedApp: @unchecked Sendable {
     let element: AXUIElement
     let queue: DispatchQueue
 
-    // Created on the main thread; its run-loop source lives on the main run loop and is
-    // removed there in `invalidate()` before this object can be released.
-    private var observer: AXObserver?
+    // Created once in init and never changed, so the app's queue can read it without a race.
+    // Its run-loop source lives on the main run loop and is removed there in `invalidate()`;
+    // `isLive` tells the queue to stop subscribing after that.
+    private let observer: AXObserver?
+    private let isLive = Atomic<Bool>(true)
     private let report: @Sendable (WindowEvent) -> Void
 
     // Queue-confined state.
     private var windows: [(ref: AXRef, id: CGWindowID)] = []
     private var pendingFrame = Set<CGWindowID>()
+    private var pendingTitle = Set<CGWindowID>()
     private var appNotificationsAdded = false
 
     private static let appNotifications = [
@@ -65,16 +69,18 @@ final class TrackedApp: @unchecked Sendable {
         if AXObserverCreate(pid, callback, &obs) == .success, let obs {
             observer = obs
             CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
+        } else {
+            observer = nil
         }
     }
 
     /// Stops notifications. Must run on the main thread (same run loop the source is on).
     @MainActor
     func invalidate() {
+        isLive.store(false, ordering: .sequentiallyConsistent)
         if let observer {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
         }
-        observer = nil
     }
 
     private var refcon: UnsafeMutableRawPointer { Unmanaged.passUnretained(self).toOpaque() }
@@ -85,7 +91,7 @@ final class TrackedApp: @unchecked Sendable {
     /// still launching often refuse AX for a moment, so this retries a few times.
     func start(attempt: Int = 0) {
         queue.async { [self] in
-            guard let observer else { return }
+            guard let observer, isLive.load(ordering: .sequentiallyConsistent) else { return }
             if !appNotificationsAdded {
                 var ok = true
                 for n in Self.appNotifications {
@@ -108,12 +114,21 @@ final class TrackedApp: @unchecked Sendable {
         }
     }
 
+    /// Re-runs discovery if the app refused its notifications at launch (all retries failed),
+    /// so its new windows are seen once it's in use. Cheap no-op otherwise.
+    func ensureSubscribed() {
+        queue.async { [self] in
+            guard !appNotificationsAdded, isLive.load(ordering: .sequentiallyConsistent) else { return }
+            start()
+        }
+    }
+
     /// Starts tracking one window element; returns nil for non-standard windows. Queue only.
     private func track(_ el: AXUIElement) -> ManagedWindow? {
         guard AX.isStandardWindow(el), let id = AX.windowID(el) else { return nil }
         if !windows.contains(where: { $0.id == id }) {
             windows.append((AXRef(el), id))
-            if let observer {
+            if let observer, isLive.load(ordering: .sequentiallyConsistent) {
                 for n in Self.windowNotifications {
                     AXObserverAddNotification(observer, el, n as CFString, refcon)
                 }
@@ -122,10 +137,14 @@ final class TrackedApp: @unchecked Sendable {
         return snapshot(el, id)
     }
 
+    private static let snapshotAttributes = [kAXPositionAttribute, kAXSizeAttribute, kAXTitleAttribute, kAXMinimizedAttribute]
+
+    /// Frame, title and minimized state in one round trip to the app.
     private func snapshot(_ el: AXUIElement, _ id: CGWindowID) -> ManagedWindow? {
-        guard let frame = AX.frame(el) else { return nil }
-        return ManagedWindow(id: id, pid: pid, title: AX.string(el, kAXTitleAttribute) ?? "",
-                             frame: frame, isMinimized: AX.bool(el, kAXMinimizedAttribute) ?? false)
+        guard let v = AX.values(el, Self.snapshotAttributes),
+              let p = AX.decodePoint(v[0]), let s = AX.decodeSize(v[1]) else { return nil }
+        return ManagedWindow(id: id, pid: pid, title: (v[2] as? String) ?? "",
+                             frame: CGRect(origin: p, size: s), isMinimized: AX.decodeBool(v[3]) ?? false)
     }
 
     /// The AX element of a tracked window. Queue only.
@@ -148,6 +167,13 @@ final class TrackedApp: @unchecked Sendable {
         switch n {
         case kAXWindowCreatedNotification:
             if let w = track(el) { report(.upsert(w)) }
+            else {
+                // Some apps set the role / subrole a moment after creating the window: look once more.
+                let ref = AXRef(el)
+                queue.asyncAfter(deadline: .now() + 0.15) { [self] in
+                    if knownID(ref.element) == nil, let w = track(ref.element) { report(.upsert(w)) }
+                }
+            }
 
         case kAXUIElementDestroyedNotification:
             // The element is already dead, so match it against what we stored.
@@ -169,7 +195,17 @@ final class TrackedApp: @unchecked Sendable {
                 if let w = snapshot(ref.element, id) { report(.upsert(w)) }
             }
 
-        default:   // minimized, deminimized, title changed
+        case kAXTitleChangedNotification:
+            // Terminals and browsers retitle constantly; titles are only shown in the switcher and
+            // overview, so read at most every 0.5 s per window.
+            guard let id = knownID(el), pendingTitle.insert(id).inserted else { return }
+            let ref = AXRef(el)
+            queue.asyncAfter(deadline: .now() + 0.5) { [self] in
+                pendingTitle.remove(id)
+                if let w = snapshot(ref.element, id) { report(.upsert(w)) }
+            }
+
+        default:   // minimized, deminimized
             if let id = knownID(el), let w = snapshot(el, id) { report(.upsert(w)) }
         }
     }

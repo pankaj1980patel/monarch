@@ -268,6 +268,12 @@ struct SwitcherTests {
         let ids = SwitcherLogic.order(focused: 5, mru: [5, 3, 9], zOrder: [1, 3, 7], others: [8, 7, 2], include: { $0 != 9 })
         expect(ids == [5, 3, 1, 7, 8, 2])
         let many = SwitcherLogic.order(focused: nil, mru: Array(1...30), zOrder: [], others: [], include: { _ in true })
+        // The stacking order (a WindowServer call) is fetched only when recent windows don't fill the list.
+        var fetched = false
+        _ = SwitcherLogic.order(focused: 1, mru: Array(1...25), zOrder: { fetched = true; return [99] }, others: [], include: { _ in true })
+        expect(!fetched)
+        let short = SwitcherLogic.order(focused: 1, mru: [2, 3], zOrder: { fetched = true; return [4] }, others: [5], include: { _ in true })
+        expect(fetched && short == [1, 2, 3, 4, 5])
         expect(many.count == SwitcherLogic.maxItems)
     }
 

@@ -39,25 +39,35 @@ enum WindowFocuser {
     /// back and forth never leaves stale focus changes fighting each other.
     private static let generation = Atomic<UInt64>(0)
 
-    /// Focuses window `id` of `app`. Returns immediately; the work runs on the app's queue.
+    /// The WindowServer calls don't involve the app at all, so they run here right away instead
+    /// of waiting behind the app's queued window reads (a busy terminal or browser).
+    private static let focusQueue = DispatchQueue(label: "monarch.focus", qos: .userInteractive)
+
+    /// Focuses window `id` of `app`. Returns immediately.
+    /// - On the focus queue: make the process frontmost for that window and make it key
+    ///   (WindowServer only: needs the pid and window id, not the app's attention).
+    /// - On the app's queue: AXRaise, the only part that talks to the app.
     static func focus(_ id: CGWindowID, of app: TrackedApp, perf: PerformanceMonitor, metric: String, since start: Double) {
         let gen = generation.add(1, ordering: .relaxed).newValue
-        app.queue.async {
+        let pid = app.pid
+        focusQueue.async {
             guard generation.load(ordering: .relaxed) == gen else { return }
-            guard let win = app.element(for: id) else { return }
+            var raised = false
             if let s = symbols {
                 var psn = ProcessSerialNumber()
-                if s.getPSN(app.pid, &psn) == noErr {
+                if s.getPSN(pid, &psn) == noErr {
                     _ = s.setFront(&psn, id, 0x200)          // kCPSUserGenerated
                     makeKeyWindow(&psn, id, s.post)
-                } else {
-                    activateFallback(app.pid)
+                    raised = true
+                    perf.record(metric, since: start)
                 }
-            } else {
-                activateFallback(app.pid)
             }
-            AXUIElementPerformAction(win, kAXRaiseAction as CFString)
-            perf.record(metric, since: start)
+            if !raised { activateFallback(pid) }
+            app.queue.async {
+                guard generation.load(ordering: .relaxed) == gen, let win = app.element(for: id) else { return }
+                AXUIElementPerformAction(win, kAXRaiseAction as CFString)
+                if !raised { perf.record(metric, since: start) }
+            }
         }
     }
 

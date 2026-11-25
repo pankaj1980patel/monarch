@@ -86,16 +86,20 @@ final class WorkspaceManager {
         if state.hidden.count != before || !FileManager.default.fileExists(atPath: Self.fileURL.path) { save() }
     }
 
+    /// Encodes on main (the state is small), writes on a background queue so a slow disk never
+    /// delays the HUD or the focus change. Writes that come in quick succession collapse into
+    /// one: only the newest state is written. Listeners of the file are told after it's written.
     private func save() {
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys]
-        if let data = try? enc.encode(state) {
-            try? FileManager.default.createDirectory(at: Self.fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try? data.write(to: Self.fileURL, options: .atomic)
-        }
-        bridge.stateChanged()
+        if let data = try? enc.encode(state) { Self.writer.write(data, to: Self.fileURL) { [weak self] in self?.bridge.stateChanged() } }
         onChange?()
     }
+
+    private static let writer = StateWriter()
+
+    /// Waits for a queued write (on quit, so the last switch isn't lost).
+    func flushSave() { Self.writer.flush() }
 
     // MARK: Commands
 
@@ -140,17 +144,21 @@ final class WorkspaceManager {
             parks.append(id)
         }
         var restores: [(CGWindowID, CGRect)] = []
+        var previous: [CGWindowID: ParkedWindow] = [:]
         for (id, e) in state.incoming(n, on: uuid) {
             state.hidden.removeValue(forKey: String(id))
+            previous[id] = e
             restores.append((id, e.relativeFrame.offsetBy(dx: display.visibleFrame.minX, dy: display.visibleFrame.minY)))
         }
         state.active[uuid] = n
         let top = focusID ?? restores.last?.0
+        earlyFocused = nil
+        earlyFocusTime = eventTime
 
-        run(parks: parks, home: display, restores: restores) { [weak self] in
+        run(parks: parks, home: display, restores: restores, focusOn: top, previous: previous) { [weak self] in
             guard let self else { return }
             self.save()
-            if let top { self.focus?(top, "12 workspace: switch → focused", eventTime) }
+            if let top { if self.earlyFocused != top { self.focus?(top, "12 workspace: switch → focused", eventTime) } }
             else { self.focusTopOrNothing(on: display, eventTime: eventTime) }
             self.perf.record("13 workspace: switch total", since: eventTime)
         }
@@ -225,16 +233,18 @@ final class WorkspaceManager {
     /// ⌃⌥⇧ 0, and on display changes: every parked window back, all displays on workspace 1.
     func restoreAll() {
         var restores: [(CGWindowID, CGRect)] = []
+        var previous: [CGWindowID: ParkedWindow] = [:]
         let list = displays.displays
         for (k, e) in state.hidden {
             guard let id = UInt32(k), let d = display(e.scr) ?? list.first else { continue }
+            previous[id] = e
             restores.append((id, Parking.fit(e.relativeFrame, into: d.visibleFrame.size)
                 .offsetBy(dx: d.visibleFrame.minX, dy: d.visibleFrame.minY)))
         }
         state.hidden.removeAll()
         state.active.removeAll()
         guard let home = list.first else { save(); return }
-        run(parks: [], home: home, restores: restores) { [weak self] in self?.save() }
+        run(parks: [], home: home, restores: restores, previous: previous) { [weak self] in self?.save() }
         if restores.isEmpty { save() }
     }
 
@@ -256,50 +266,106 @@ final class WorkspaceManager {
     // MARK: Window moves
 
     /// Parks and restores windows, one hop per app, all apps in parallel; `done` runs on main.
-    private func run(parks: [CGWindowID], home: Display, restores: [(CGWindowID, CGRect)], done: @escaping () -> Void) {
-        var byApp: [pid_t: (parks: [CGWindowID], restores: [(CGWindowID, CGRect)])] = [:]
-        for id in parks { if let w = engine.windows[id] { byApp[w.pid, default: ([], [])].parks.append(id) } }
+    ///
+    /// - `focusOn`: focused as soon as its own app has restored it, not after every app is done.
+    /// - `previous`: parked entries of the windows being restored, put back if a restore fails.
+    /// - A hung app costs at most one timeout: after an AX call that times out, the rest of
+    ///   that app's windows are skipped (parks are dropped from the state, restores stay parked).
+    /// - `done` runs when every app is finished or after 1 s, whichever is first, so one slow
+    ///   app can't hold up the HUD, the focus or the save. Late results are applied (and saved)
+    ///   when they arrive.
+    private func run(parks: [CGWindowID], home: Display, restores: [(CGWindowID, CGRect)],
+                     focusOn: CGWindowID? = nil, previous: [CGWindowID: ParkedWindow] = [:],
+                     done: @escaping () -> Void) {
+        var byApp: [pid_t: (parks: [(CGWindowID, CGSize)], restores: [(CGWindowID, CGRect)])] = [:]
+        for id in parks { if let w = engine.windows[id] { byApp[w.pid, default: ([], [])].parks.append((id, w.frame.size)) } }
         for r in restores { if let w = engine.windows[r.0] { byApp[w.pid, default: ([], [])].restores.append(r) } }
 
         let group = DispatchGroup()
         let screens = displays.displays
         let results = ParkResults()
+        let focusPID = focusOn.flatMap { engine.windows[$0]?.pid }
+        let focusEarly: (@Sendable () -> Void)?
+        if let id = focusOn {
+            focusEarly = { [weak self] in
+                DispatchQueue.main.async { MainActor.assumeIsolated { self?.earlyFocus(id) } }
+            }
+        } else {
+            focusEarly = nil
+        }
         for (pid, work) in byApp {
-            guard let app = engine.apps[pid] else { continue }
+            guard let app = engine.apps[pid] else {
+                for (id, _) in work.parks { results.add(id, nil) }          // app gone: nothing parked
+                continue
+            }
+            let isFocusApp = pid == focusPID
             app.queue.async(group: group) { @Sendable in
-                for id in work.parks {
-                    guard let win = app.element(for: id) else { continue }
+                var hung = false
+                // Restores first: they're what the user is waiting to see.
+                for (id, frame) in work.restores {
+                    if hung { results.failedRestore(id); continue }
+                    let t = PerformanceMonitor.now()
+                    guard let win = app.element(for: id), let current = AX.frame(win) else {
+                        hung = PerformanceMonitor.now() - t > Self.hungAfter
+                        results.failedRestore(id)
+                        continue
+                    }
+                    WindowMover.apply(frame, to: win, app: app.element, current: current)
+                }
+                if isFocusApp { focusEarly?() }
+                for (id, size) in work.parks {
+                    // Not moved (missing element, full screen, hung app): not parked either.
+                    guard !hung, let win = app.element(for: id) else { results.add(id, nil); continue }
+                    let t = PerformanceMonitor.now()
                     // macOS full-screen windows live in their own Space: leave them alone.
                     if AX.bool(win, "AXFullScreen") == true { results.add(id, nil); continue }
-                    results.add(id, Self.park(win, home: home, displays: screens))
-                }
-                for (id, frame) in work.restores {
-                    guard let win = app.element(for: id), let current = AX.frame(win) else { continue }
-                    WindowMover.apply(frame, to: win, app: app.element, current: current)
+                    let spot = Self.park(win, size: size, home: home, displays: screens)
+                    if spot == nil && PerformanceMonitor.now() - t > Self.hungAfter { hung = true }
+                    results.add(id, spot)
                 }
             }
         }
-        group.notify(queue: .main) { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                for (id, spot) in results.all {
-                    let key = String(id)
-                    if let spot { self.state.hidden[key]?.px = spot.x; self.state.hidden[key]?.py = spot.y }
-                    else { self.state.hidden.removeValue(forKey: key) }
-                }
-                done()
+
+        var finished = false
+        let finish: @MainActor (_ final: Bool) -> Void = { [weak self] final in
+            guard let self else { return }
+            for (id, spot) in results.takeAll() {
+                let key = String(id)
+                if let spot { self.state.hidden[key]?.px = spot.x; self.state.hidden[key]?.py = spot.y }
+                else { self.state.hidden.removeValue(forKey: key) }
             }
+            for id in results.takeFailedRestores() {
+                if let e = previous[id] { self.state.hidden[String(id)] = e }  // still parked: keep it findable
+            }
+            if !finished { finished = true; done() }
+            else if final { self.save() }                                 // late results after the deadline
+        }
+        group.notify(queue: .main) { MainActor.assumeIsolated { finish(true) } }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.deadline) {
+            MainActor.assumeIsolated { if !finished { finish(false) } }
         }
     }
 
+    /// An AX call that took longer than this failed by timing out: the app is hung.
+    nonisolated private static let hungAfter = 0.2
+    /// Longest a workspace operation waits before finishing without a slow app.
+    private static let deadline = 1.0
+    /// The window `run` focused early, so `done` doesn't focus it again.
+    private var earlyFocused: CGWindowID?
+    private var earlyFocusTime: Double = 0
+
+    private func earlyFocus(_ id: CGWindowID) {
+        earlyFocused = id
+        focus?(id, "12 workspace: switch → focused", earlyFocusTime)
+    }
+
     /// Parks one window off a corner of `home`; returns where macOS actually put it.
-    /// App queue only.
-    nonisolated private static func park(_ win: AXUIElement, home: Display, displays: [Display]) -> CGPoint? {
-        guard let size = AX.size(win) else { return nil }
+    /// `size` comes from the engine's cache (no round trip). App queue only.
+    nonisolated private static func park(_ win: AXUIElement, size: CGSize, home: Display, displays: [Display]) -> CGPoint? {
         var last: CGPoint?
         for spot in Parking.spots(for: size, screen: home.frame) {
             AX.setPoint(win, spot)
-            guard let actual = AX.point(win) else { continue }
+            guard let actual = AX.point(win) else { break }               // no answer: don't try more spots
             last = actual
             if !Parking.overlapsOther(CGRect(origin: actual, size: size), home: home.id, displays: displays) { break }
         }
@@ -314,10 +380,11 @@ final class WorkspaceManager {
                             w: frame.width, h: frame.height, z: z)
     }
 
-    /// Windows showing on `display`, top-most first.
-    func visibleWindows(on display: Display) -> [CGWindowID] {
+    /// Windows showing on `display`, top-most first. Pass `zOrder` when asking for several
+    /// displays in one operation, so the window list is fetched once.
+    func visibleWindows(on display: Display, zOrder: [UInt32]? = nil) -> [CGWindowID] {
         let screens = displays.displays
-        return AutoFocusManager.zOrder().filter { id in
+        return (zOrder ?? AutoFocusManager.zOrder()).filter { id in
             guard let w = engine.windows[id], !w.isMinimized, !engine.hiddenPIDs.contains(w.pid), !state.isParked(id)
             else { return false }
             return Geometry.display(for: w.frame, in: screens)?.id == display.id
@@ -329,10 +396,11 @@ final class WorkspaceManager {
     /// focus is still on a now-parked window, move focus to the top window elsewhere so keys
     /// don't go to something hidden.
     private func focusTopOrNothing(on display: Display, eventTime: Double) {
-        if let top = visibleWindows(on: display).first { focus?(top, "12 workspace: switch → focused", eventTime); return }
+        let z = AutoFocusManager.zOrder()                        // after the moves: fetch fresh, once
+        if let top = visibleWindows(on: display, zOrder: z).first { focus?(top, "12 workspace: switch → focused", eventTime); return }
         guard let f = engine.focusedID, state.isParked(f) else { return }
         for d in displays.displays where d.id != display.id {
-            if let top = visibleWindows(on: d).first { focus?(top, "12 workspace: switch → focused", eventTime); return }
+            if let top = visibleWindows(on: d, zOrder: z).first { focus?(top, "12 workspace: switch → focused", eventTime); return }
         }
     }
 
@@ -343,16 +411,43 @@ final class WorkspaceManager {
         return displays.displays.first { $0.frame.contains(p) } ?? displays.displays.first
     }
 
-    nonisolated private static func existingWindowIDs() -> Set<UInt32> {
-        guard let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return [] }
-        return Set(list.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value })
+    nonisolated private static func existingWindowIDs() -> Set<UInt32> { WindowList.existingIDs() }
+}
+
+/// Background, coalescing writer for workspaces.json.
+private final class StateWriter: @unchecked Sendable {
+    private let queue = DispatchQueue(label: "monarch.workspaces.save", qos: .utility)
+    private let lock = NSLock()
+    private var pending: Data?
+
+    /// `written` runs on main after the newest data is on disk.
+    func write(_ data: Data, to url: URL, written: @escaping @MainActor () -> Void) {
+        lock.lock()
+        let scheduled = pending != nil
+        pending = data
+        lock.unlock()
+        guard !scheduled else { return }                       // a write is already queued: it takes the newest
+        queue.async { [self] in
+            lock.lock(); let d = pending; pending = nil; lock.unlock()
+            guard let d else { return }
+            try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try? d.write(to: url, options: .atomic)
+            DispatchQueue.main.async { MainActor.assumeIsolated { written() } }
+        }
     }
+
+    /// Blocks until queued writes are on disk.
+    func flush() { queue.sync {} }
 }
 
 /// Collects park results from several app queues.
 private final class ParkResults: @unchecked Sendable {
     private let lock = NSLock()
     private var items: [(CGWindowID, CGPoint?)] = []
+    private var failed: [CGWindowID] = []
     func add(_ id: CGWindowID, _ p: CGPoint?) { lock.lock(); items.append((id, p)); lock.unlock() }
-    var all: [(CGWindowID, CGPoint?)] { lock.lock(); defer { lock.unlock() }; return items }
+    func failedRestore(_ id: CGWindowID) { lock.lock(); failed.append(id); lock.unlock() }
+    /// Results so far, each handed out once (the deadline and the final pass both read them).
+    func takeAll() -> [(CGWindowID, CGPoint?)] { lock.lock(); defer { items.removeAll(); lock.unlock() }; return items }
+    func takeFailedRestores() -> [CGWindowID] { lock.lock(); defer { failed.removeAll(); lock.unlock() }; return failed }
 }

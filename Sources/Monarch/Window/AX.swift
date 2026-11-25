@@ -53,9 +53,45 @@ enum AX {
         AXUIElementSetAttributeValue(el, attr as CFString, (value ? kCFBooleanTrue : kCFBooleanFalse)!) == .success
     }
 
+    /// Immutable after creation, so sharing it across app queues is safe.
+    nonisolated(unsafe) private static let frameAttributes = [kAXPositionAttribute, kAXSizeAttribute] as CFArray
+
+    /// Position and size in one round trip.
     static func frame(_ el: AXUIElement) -> CGRect? {
-        guard let p = point(el), let s = size(el) else { return nil }
+        var v: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(el, frameAttributes, [], &v) == .success,
+              let arr = v as? [AnyObject], arr.count == 2,
+              let p = decodePoint(arr[0]), let s = decodeSize(arr[1]) else { return nil }
         return CGRect(origin: p, size: s)
+    }
+
+    /// Several attributes in one round trip. An attribute the element doesn't have comes back
+    /// as nil (the API returns an error value in its place).
+    static func values(_ el: AXUIElement, _ attrs: [String]) -> [AnyObject?]? {
+        var v: CFArray?
+        guard AXUIElementCopyMultipleAttributeValues(el, attrs as CFArray, [], &v) == .success,
+              let arr = v as? [AnyObject], arr.count == attrs.count else { return nil }
+        return arr.map { obj in
+            if CFGetTypeID(obj) == AXValueGetTypeID(), AXValueGetType(obj as! AXValue) == .axError { return nil }
+            return obj
+        }
+    }
+
+    static func decodePoint(_ obj: AnyObject?) -> CGPoint? {
+        guard let obj, CFGetTypeID(obj) == AXValueGetTypeID() else { return nil }
+        var p = CGPoint.zero
+        return AXValueGetValue(obj as! AXValue, .cgPoint, &p) ? p : nil
+    }
+
+    static func decodeSize(_ obj: AnyObject?) -> CGSize? {
+        guard let obj, CFGetTypeID(obj) == AXValueGetTypeID() else { return nil }
+        var s = CGSize.zero
+        return AXValueGetValue(obj as! AXValue, .cgSize, &s) ? s : nil
+    }
+
+    static func decodeBool(_ obj: AnyObject?) -> Bool? {
+        guard let obj, CFGetTypeID(obj) == CFBooleanGetTypeID() else { return nil }
+        return CFBooleanGetValue((obj as! CFBoolean))
     }
 
     static func point(_ el: AXUIElement) -> CGPoint? {

@@ -232,10 +232,14 @@ final class GestureController {
         stopTicker()
     }
 
-    private func note(_ s: String) {
+    private static let timeFormat: DateFormatter = {
         let f = DateFormatter()
         f.dateFormat = "HH:mm:ss"
-        log.append("\(f.string(from: Date()))  \(s)")
+        return f
+    }()
+
+    private func note(_ s: String) {
+        log.append("\(Self.timeFormat.string(from: Date()))  \(s)")
         if log.count > 16 { log.removeFirst(log.count - 16) }
     }
 }

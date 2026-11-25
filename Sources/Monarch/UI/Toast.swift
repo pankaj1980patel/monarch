@@ -7,6 +7,9 @@ final class Toast {
     private var panel: NSPanel?
     private var label: NSTextField?
     private var hideWork: DispatchWorkItem?
+    /// Bumped by every show, so a fade-out that finishes after a newer toast appeared
+    /// doesn't hide the newer one.
+    private var generation = 0
 
     func show(_ text: String, seconds: Double = 0.9) {
         let panel = self.panel ?? makePanel()
@@ -21,6 +24,8 @@ final class Toast {
         panel.setFrame(NSRect(x: vf.midX - size.width / 2, y: vf.minY + vf.height * 0.18,
                               width: size.width, height: size.height), display: false)
         label.frame.origin = NSPoint(x: 22, y: 12)
+        generation += 1
+        let gen = generation
         panel.alphaValue = 1
         panel.orderFrontRegardless()
 
@@ -29,7 +34,10 @@ final class Toast {
             NSAnimationContext.runAnimationGroup({ ctx in
                 ctx.duration = 0.2
                 self?.panel?.animator().alphaValue = 0
-            }, completionHandler: { MainActor.assumeIsolated { self?.panel?.orderOut(nil) } })
+            }, completionHandler: { MainActor.assumeIsolated {
+                guard let self, self.generation == gen else { return }
+                self.panel?.orderOut(nil)
+            } })
         }
         hideWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
