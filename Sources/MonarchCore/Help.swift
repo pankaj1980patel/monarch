@@ -49,6 +49,7 @@ public enum HelpSheet {
         add("Workspaces (per screen)", [
             family(.workspace1, .workspace9, "Show workspace N on screen under mouse"),
             family(.moveToWorkspace1, .moveToWorkspace9, "Send focused window to workspace N"),
+            family(.sendAllToWorkspace1, .sendAllToWorkspace9, "Send all windows on screen to workspace N"),
             gestures ? Row(keys: "4 fingers", text: "Swipe ← next / → previous workspace") : nil,
             row(.toggleOverview, "Overview" + (gestures ? " (also 3-finger swipe ↑)" : "")),
             gestures ? Row(keys: "3 fingers", text: "Swipe ↓ App Exposé (again to close)") : nil,

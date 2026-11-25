@@ -416,6 +416,32 @@ struct SwitcherRegressionTests {
 // MARK: - Workspaces
 
 struct WorkspaceRegressionTests {
+    func testSendAllActions() {
+        for n in 1...9 {
+            let a = Action(rawValue: "workspace.sendAll.\(n)")
+            expect(a?.sendAllWorkspace == n && a?.switchWorkspace == nil && a?.moveWorkspace == nil && a?.isWorkspaceAction == true)
+            expect(a?.defaultShortcut == "ctrl+alt+shift+\(n)")
+        }
+        expect(Action.workspace4.sendAllWorkspace == nil && Action.moveToWorkspace4.sendAllWorkspace == nil)
+        expect(Action.restoreAllWindows.sendAllWorkspace == nil)
+        expect(Shortcut(Action.sendAllToWorkspace3.defaultShortcut)?.description == "⌃⌥⇧ 3")
+    }
+
+    func testMakeRoomPushesOnlyTargetWorkspaceDown() {
+        var s = WorkspaceState()
+        s.hidden["1"] = ParkedWindow(ws: 2, scr: "A", x: 0, y: 0, w: 10, h: 10, z: 1)
+        s.hidden["2"] = ParkedWindow(ws: 2, scr: "A", x: 0, y: 0, w: 10, h: 10, z: 2)
+        s.hidden["3"] = ParkedWindow(ws: 3, scr: "A", x: 0, y: 0, w: 10, h: 10, z: 1)   // other workspace
+        s.hidden["4"] = ParkedWindow(ws: 2, scr: "B", x: 0, y: 0, w: 10, h: 10, z: 1)   // other display
+        s.makeRoom(3, onTopOf: 2, on: "A")
+        expect(s.hidden["1"]?.z == 4 && s.hidden["2"]?.z == 5)
+        expect(s.hidden["3"]?.z == 1 && s.hidden["4"]?.z == 1)
+        // Sent windows get z 1…3: restored after the old ones, so they end up on top.
+        s.hidden["5"] = ParkedWindow(ws: 2, scr: "A", x: 0, y: 0, w: 10, h: 10, z: 1)
+        s.hidden["6"] = ParkedWindow(ws: 2, scr: "A", x: 0, y: 0, w: 10, h: 10, z: 2)
+        expect(s.incoming(2, on: "A").map(\.id) == [2, 1, 6, 5])
+    }
+
     func pw(_ ws: Int, _ scr: String = "A", z: Int = 1, px: Double? = nil, py: Double? = nil) -> ParkedWindow {
         ParkedWindow(ws: ws, scr: scr, x: 10, y: 20, w: 300, h: 200, z: z, px: px, py: py)
     }
@@ -1101,6 +1127,8 @@ struct ActionRegressionTests {
             // switch / move numbers exist only for workspace actions and are in range.
             if let n = a.switchWorkspace { soft(a.isWorkspaceAction && (1...9).contains(n)) }
             if let n = a.moveWorkspace { soft(a.isWorkspaceAction && (1...9).contains(n)) }
+            if let n = a.sendAllWorkspace { soft(a.isWorkspaceAction && (1...9).contains(n)) }
+            soft([a.switchWorkspace, a.moveWorkspace, a.sendAllWorkspace].compactMap { $0 }.count <= 1)
             if let n = a.arrangeCount { soft((0...9).contains(n)) }
             soft([a.isSwitcherAction, a.isWorkspaceAction, a.isFocusAction].filter { $0 }.count <= 1)
             if a.isSwitcherAction { switchers += 1 }
@@ -1108,7 +1136,7 @@ struct ActionRegressionTests {
             if a.isFocusAction { focus += 1 }
             if a.arrangeCount != nil { arranges += 1 }
         }
-        soft(switchers == 4 && workspaces == 19 && focus == 7 && arranges == 10)
+        soft(switchers == 4 && workspaces == 28 && focus == 7 && arranges == 10)
         expect(ok)
     }
 
@@ -1446,6 +1474,7 @@ struct HelpRegressionTests {
         let ws = s.first { $0.title.hasPrefix("Workspaces") }!
         expect(ws.rows.contains(HelpSheet.Row(keys: "⌥ 1…9", text: "Show workspace N on screen under mouse")))
         expect(ws.rows.contains(HelpSheet.Row(keys: "⌥⇧ 1…9", text: "Send focused window to workspace N")))
+        expect(ws.rows.contains(HelpSheet.Row(keys: "⌃⌥⇧ 1…9", text: "Send all windows on screen to workspace N")))
         expect(ws.rows.contains { $0.keys == "4 fingers" } && ws.rows.contains { $0.keys == "3 fingers" })
         expect(ws.rows.contains { $0.text == "Overview (also 3-finger swipe ↑)" && $0.keys == "⌃⌥ Space" })
         let snap = s.first { $0.title == "Snap" }!

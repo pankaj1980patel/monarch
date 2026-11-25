@@ -119,6 +119,7 @@ final class WorkspaceManager {
     func perform(_ action: Action, eventTime: Double) {
         if let n = action.switchWorkspace, let d = mouseDisplay() { switchTo(n, on: d, eventTime: eventTime) }
         else if let n = action.moveWorkspace { moveFocused(to: n, eventTime: eventTime) }
+        else if let n = action.sendAllWorkspace, let d = mouseDisplay() { sendAll(to: n, from: d, eventTime: eventTime) }
         else if action == .restoreAllWindows { restoreAll(); hud.toast("All windows back", on: mouseDisplay()) }
     }
 
@@ -197,6 +198,27 @@ final class WorkspaceManager {
             self?.focusTopOrNothing(on: d, eventTime: eventTime)
         }
         hud.flash(on: d, state: state, from: nil, target: n)
+    }
+
+    /// ⌃⌥⇧ N: sends every window showing on `display` to its workspace `n`, keeping their
+    /// stacking order, on top of the windows already there. The screen stays where it is.
+    func sendAll(to n: Int, from display: Display, eventTime: Double) {
+        let cur = state.activeWorkspace(display.uuid)
+        let ids = visibleWindows(on: display).filter { engine.windows[$0] != nil }
+        guard n != cur, !ids.isEmpty else { hud.flash(on: display, state: state, from: nil, target: nil); return }
+        lastSwitch = PerformanceMonitor.now()
+        state.makeRoom(ids.count, onTopOf: n, on: display.uuid)
+        for (z, id) in ids.enumerated() {
+            guard let w = engine.windows[id] else { continue }
+            state.hidden[String(id)] = entry(for: w.frame, ws: n, display: display, z: z + 1)
+        }
+        run(parks: ids, home: display, restores: []) { [weak self] in
+            guard let self else { return }
+            self.save()
+            self.focusTopOrNothing(on: display, eventTime: eventTime)
+            self.perf.record("13 workspace: send all total", since: eventTime)
+        }
+        hud.flash(on: display, state: state, from: nil, target: n)
     }
 
     /// Overview drag: put window `id` on workspace `n` of `target` (visible if `n` is active there).

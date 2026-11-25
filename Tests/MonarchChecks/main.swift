@@ -678,6 +678,8 @@ run("HistoryRegressionTests.testRememberOverwritesAndWindowsAreIndependent") { H
 run("HistoryRegressionTests.testCycleResetRules") { HistoryRegressionTests().testCycleResetRules() }
 run("HistoryRegressionTests.testFillSaveTakePeek") { HistoryRegressionTests().testFillSaveTakePeek() }
 run("HistoryRegressionTests.testForgetClearsWindowOnly") { HistoryRegressionTests().testForgetClearsWindowOnly() }
+run("WorkspaceRegressionTests.testSendAllActions") { WorkspaceRegressionTests().testSendAllActions() }
+run("WorkspaceRegressionTests.testMakeRoomPushesOnlyTargetWorkspaceDown") { WorkspaceRegressionTests().testMakeRoomPushesOnlyTargetWorkspaceDown() }
 run("HistoryRegressionTests.testForgetResetsCycleForReusedID") { HistoryRegressionTests().testForgetResetsCycleForReusedID() }
 run("PerfRegressionTests.testUnknownAndEmpty") { PerfRegressionTests().testUnknownAndEmpty() }
 run("PerfRegressionTests.testSinglePercentilesAndMetricsSorted") { PerfRegressionTests().testSinglePercentilesAndMetricsSorted() }

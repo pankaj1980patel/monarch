@@ -47,6 +47,12 @@ public struct WorkspaceState: Codable, Sendable, Equatable {
     }
 
     /// Parked windows of workspace `n` on a display, bottom-most first (restore order).
+    /// Makes room on top of workspace `n` of `uuid` for `count` windows sent there together:
+    /// its parked windows move down the stack, so the sent ones (z 1…count) come back on top.
+    public mutating func makeRoom(_ count: Int, onTopOf n: Int, on uuid: String) {
+        for (k, e) in hidden where e.scr == uuid && e.ws == n { hidden[k]?.z = e.z + count }
+    }
+
     public func incoming(_ n: Int, on uuid: String) -> [(id: UInt32, entry: ParkedWindow)] {
         hidden.compactMap { k, e in (e.scr == uuid && e.ws == n) ? UInt32(k).map { ($0, e) } : nil }
             .sorted { $0.entry.z > $1.entry.z }

@@ -52,6 +52,10 @@ public enum Action: String, CaseIterable, Sendable, Codable {
     case moveToWorkspace1 = "workspace.move.1", moveToWorkspace2 = "workspace.move.2", moveToWorkspace3 = "workspace.move.3"
     case moveToWorkspace4 = "workspace.move.4", moveToWorkspace5 = "workspace.move.5", moveToWorkspace6 = "workspace.move.6"
     case moveToWorkspace7 = "workspace.move.7", moveToWorkspace8 = "workspace.move.8", moveToWorkspace9 = "workspace.move.9"
+    // ⌃⌥⇧ N: sends every window showing on the screen under the mouse to workspace N
+    case sendAllToWorkspace1 = "workspace.sendAll.1", sendAllToWorkspace2 = "workspace.sendAll.2", sendAllToWorkspace3 = "workspace.sendAll.3"
+    case sendAllToWorkspace4 = "workspace.sendAll.4", sendAllToWorkspace5 = "workspace.sendAll.5", sendAllToWorkspace6 = "workspace.sendAll.6"
+    case sendAllToWorkspace7 = "workspace.sendAll.7", sendAllToWorkspace8 = "workspace.sendAll.8", sendAllToWorkspace9 = "workspace.sendAll.9"
     case restoreAllWindows = "workspace.restoreAll"
 
     public var isWorkspaceAction: Bool { rawValue.hasPrefix("workspace.") }
@@ -65,10 +69,12 @@ public enum Action: String, CaseIterable, Sendable, Codable {
     case gestureStatus = "gestures.status"       // gesture settings, Dock state and recent swipes
     /// ⌥ N: the workspace to switch to.
     public var switchWorkspace: Int? {
-        rawValue.hasPrefix("workspace.") && !rawValue.hasPrefix("workspace.move.") ? Int(rawValue.dropFirst(10)) : nil
+        rawValue.hasPrefix("workspace.") ? Int(rawValue.dropFirst(10)) : nil
     }
     /// ⌥⇧ N: the workspace to send the focused window to.
     public var moveWorkspace: Int? { rawValue.hasPrefix("workspace.move.") ? Int(rawValue.dropFirst(15)) : nil }
+    /// ⌃⌥⇧ N: the workspace to send every window on the screen under the mouse to.
+    public var sendAllWorkspace: Int? { rawValue.hasPrefix("workspace.sendAll.") ? Int(rawValue.dropFirst(18)) : nil }
 
     /// For arrange actions: how many windows (0 = all). Nil for every other action.
     public var arrangeCount: Int? {
@@ -115,6 +121,9 @@ public enum Action: String, CaseIterable, Sendable, Codable {
         case .moveToWorkspace1, .moveToWorkspace2, .moveToWorkspace3, .moveToWorkspace4, .moveToWorkspace5,
              .moveToWorkspace6, .moveToWorkspace7, .moveToWorkspace8, .moveToWorkspace9:
             "alt+shift+" + rawValue.dropFirst(15)
+        case .sendAllToWorkspace1, .sendAllToWorkspace2, .sendAllToWorkspace3, .sendAllToWorkspace4, .sendAllToWorkspace5,
+             .sendAllToWorkspace6, .sendAllToWorkspace7, .sendAllToWorkspace8, .sendAllToWorkspace9:
+            "ctrl+alt+shift+" + rawValue.dropFirst(18)
         case .restoreAllWindows: "ctrl+alt+shift+0"
         case .toggleOverview: "ctrl+alt+space"
         case .showHelp: "ctrl+alt+/"
