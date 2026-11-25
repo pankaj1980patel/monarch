@@ -1,0 +1,44 @@
+{
+  "configurations": [
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:monarch}",
+      "name": "Debug Monarch",
+      "target": "Monarch",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug Monarch"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:monarch}",
+      "name": "Release Monarch",
+      "target": "Monarch",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release Monarch"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:monarch}",
+      "name": "Debug MonarchChecks",
+      "target": "MonarchChecks",
+      "configuration": "debug",
+      "preLaunchTask": "swift: Build Debug MonarchChecks"
+    },
+    {
+      "type": "swift",
+      "request": "launch",
+      "args": [],
+      "cwd": "${workspaceFolder:monarch}",
+      "name": "Release MonarchChecks",
+      "target": "MonarchChecks",
+      "configuration": "release",
+      "preLaunchTask": "swift: Build Release MonarchChecks"
+    }
+  ]
+}

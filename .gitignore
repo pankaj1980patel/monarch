@@ -1,0 +1,13 @@
+# SwiftPM build output
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+
+# Built app (installed to ~/Applications by scripts/build-app.sh)
+*.app
