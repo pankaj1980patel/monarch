@@ -538,3 +538,157 @@ struct FocusRevealTests {
         expect(FocusReveal.wait >= 0.2 && FocusReveal.waitAfterClick <= 1.0)   // a Dock click still feels immediate enough
     }
 }
+
+/// The workspace state machine review: gaps found and fixed.
+struct WorkspaceStateMachineTests {
+    func entry(ws: Int, scr: String = "L", z: Int = 1, asleep: Bool? = nil) -> ParkedWindow {
+        ParkedWindow(ws: ws, scr: scr, x: 10, y: 10, w: 800, h: 600, z: z, asleep: asleep)
+    }
+
+    // Gap 1: minimized windows and windows of hidden apps belong to the workspace being left.
+    func testSleepersAreRecordedOnTheWorkspaceLeft() {
+        let wins: [(id: UInt32, asleep: Bool, frame: CGRect)] = [
+            (1, false, CGRect(x: 100, y: 100, width: 500, height: 400)),       // showing: parked the usual way
+            (2, true, CGRect(x: 100, y: 100, width: 500, height: 400)),        // minimized on this display
+            (3, true, CGRect(x: 3000, y: 100, width: 500, height: 400)),       // minimized on the other display
+            (4, true, CGRect(x: 200, y: 200, width: 500, height: 400)),        // already parked
+        ]
+        let ids = Sleepers.leaving(windows: wins, display: 1, isParked: { $0 == 4 },
+                                   displayOf: { $0.minX < 1512 ? 1 : 2 })
+        expect(ids == [2])
+    }
+
+    func testWakingUp() {
+        let e = entry(ws: 1, asleep: true)
+        expect(Sleepers.wake(e, awake: false, active: 2) == .stay)              // still minimized
+        expect(Sleepers.wake(e, awake: true, active: 2) == .showWorkspace(1))   // unminimized on workspace 2
+        expect(Sleepers.wake(e, awake: true, active: 1) == .forget)             // its workspace shows
+    }
+
+    func testAsleepEntriesAreNeverTakenForShownWindows() {
+        // Their frames are on screen by design (never moved).
+        var s = WorkspaceState()
+        s.hidden["2"] = entry(ws: 1, asleep: true)
+        s.hidden["5"] = entry(ws: 1)
+        expect(s.dropShown(shows: { _ in true }) == [5])
+        expect(s.isParked(2))
+    }
+
+    func testAsleepFlagIsOptionalInTheFile() throws {
+        let old = try JSONDecoder().decode(ParkedWindow.self, from: Data(#"{"ws":2,"scr":"L","x":0,"y":0,"w":1,"h":1,"z":1}"#.utf8))
+        expect(old.asleep == nil && !old.isAsleep)
+        let plain = String(data: try JSONEncoder().encode(entry(ws: 2)), encoding: .utf8)!
+        expect(!plain.contains("asleep"))                                       // unchanged for Hammerspoon
+        let sleepy = try JSONDecoder().decode(ParkedWindow.self, from: JSONEncoder().encode(entry(ws: 2, asleep: true)))
+        expect(sleepy.isAsleep)
+    }
+
+    // Gap 2: entries on a display that isn't connected are brought back.
+    func testEntriesOnMissingDisplaysAreTaken() {
+        var s = WorkspaceState()
+        s.hidden["1"] = entry(ws: 2, scr: "gone")
+        s.hidden["2"] = entry(ws: 3, scr: "L")
+        let taken = s.takeOnMissingDisplays(connected: ["L"])
+        expect(taken.map(\.id) == [1] && !s.isParked(1) && s.isParked(2))
+        expect(s.takeOnMissingDisplays(connected: ["L"]).isEmpty)
+    }
+
+    // Gap 3: ⌥⇧ N and an overview drag record the real frame, not a stale parked one.
+    func testRecordedFrameIsTheLiveOne() {
+        let parkedSpot = CGRect(x: 1500, y: 970, width: 800, height: 600)    // Monarch's stale copy
+        let live = CGRect(x: 100, y: 100, width: 800, height: 600)
+        expect(CurrentFrame.best(restoreTarget: nil, live: live, cached: parkedSpot) == live)
+        let target = CGRect(x: 40, y: 60, width: 800, height: 600)
+        expect(CurrentFrame.best(restoreTarget: target, live: parkedSpot, cached: parkedSpot) == target)
+        expect(CurrentFrame.best(restoreTarget: nil, live: nil, cached: live) == live)
+    }
+
+    // Gaps 6 and 7: focus once, and never a window whose restore failed.
+    func testFocusAtTheEndOfAnOperation() {
+        expect(FinishFocus.step(window: 5, focusedEarly: nil, restoreFailed: false) == .focus)
+        expect(FinishFocus.step(window: 5, focusedEarly: 5, restoreFailed: false) == .nothing)     // ⌃⇧ N used to focus twice
+        expect(FinishFocus.step(window: 5, focusedEarly: nil, restoreFailed: true) == .topInstead) // off screen: not focused
+        expect(FinishFocus.step(window: 5, focusedEarly: 9, restoreFailed: false) == .focus)
+    }
+
+    // Gap 4: the window sent last comes back on top (it used to tie at z 0).
+    func testSentWindowGoesOnTop() {
+        var s = WorkspaceState()
+        s.hidden["1"] = entry(ws: 2, z: 1)
+        s.hidden["2"] = entry(ws: 2, z: 2)
+        for id in [7, 8] {                                                      // two ⌥⇧2 in a row
+            s.makeRoom(1, onTopOf: 2, on: "L")
+            s.hidden[String(id)] = entry(ws: 2, z: 1)
+        }
+        // Restored bottom to top: the last one restored is the top (and gets focus).
+        expect(s.incoming(2, on: "L").map(\.id) == [2, 1, 7, 8])
+    }
+
+    // Gap 5: a click that started the operation doesn't count; one during it does.
+    func testOnlyClicksDuringTheOperationAreRechecked() {
+        expect(FocusReveal.clickCounts(secondsSinceClick: 0.1, secondsSinceOperationStart: 0.4))    // Dock click mid-switch
+        expect(!FocusReveal.clickCounts(secondsSinceClick: 0.5, secondsSinceOperationStart: 0.4))   // the overview click that started it
+        expect(!FocusReveal.clickCounts(secondsSinceClick: 2, secondsSinceOperationStart: 5))       // too long ago
+        expect(!FocusReveal.recheckAfterOperation(clickedRecently: false))
+        expect(FocusReveal.recheckLimit >= 2 && FocusReveal.recheckDelay * Double(FocusReveal.recheckLimit) <= 3)
+    }
+
+    // Gap 8: a switch fits restored windows to the display (it may have changed size).
+    func testRestoreIsFittedToASmallerDisplay() {
+        let f = Parking.fit(CGRect(x: 1800, y: 900, width: 2400, height: 1300), into: CGSize(width: 1512, height: 957))
+        expect(f.maxX <= 1512 && f.maxY <= 957 && f.minX >= 0 && f.minY >= 0)
+    }
+}
+
+/// Found by simulating the fixes on the real Mac.
+struct SimulationFindingsTests {
+    // ⌘H on TextEdit handed focus to VS Code, whose window was parked on workspace 2: Monarch
+    // jumped to workspace 2. A hand-off isn't a request; a Dock click after it is.
+    func testHidingAnAppIsAHandOffNotARequest() {
+        expect(FocusReveal.isHandOff(secondsSinceAppGone: 0.05, secondsSinceClick: 30))     // ⌘H, no click
+        expect(!FocusReveal.isHandOff(secondsSinceAppGone: 0.5, secondsSinceClick: 0.1))    // Dock click after it
+        expect(!FocusReveal.isHandOff(secondsSinceAppGone: 5, secondsSinceClick: 30))       // long after: a real request
+        // Decided after the 0.3 s wait; macOS reported the hide after the focus change.
+        expect(FocusReveal.isHandOff(secondsSinceAppGone: 0.9, secondsSinceClick: 30, waited: 0.3))
+    }
+
+    // A switch 0.4 s after launch (a focus reveal) parked nothing: apps weren't all known yet.
+    func testOperationsWaitForDiscovery() {
+        let t = Discovery.settledAt(start: 100, otherApps: 20)
+        expect(t > 100 + 0.15 + 20 * 0.02)                     // after the last app was asked
+        expect(t < 100 + 3)                                    // but not long after
+        expect(Discovery.settledAt(start: 0, otherApps: 40) > Discovery.settledAt(start: 0, otherApps: 5))
+    }
+
+    // A Dock click while a switch ran: the switch's own focus at the end took focus away from
+    // the clicked app. The user's click wins.
+    func testClickDuringAnOperationWinsOverItsFocus() {
+        expect(FocusReveal.userClickedDuring(secondsSinceClick: 0.2, secondsSinceOperationStart: 0.4))
+        expect(!FocusReveal.userClickedDuring(secondsSinceClick: 0.4, secondsSinceOperationStart: 0.4))   // the click that started it
+        expect(!FocusReveal.userClickedDuring(secondsSinceClick: 0.37, secondsSinceOperationStart: 0.4))  // within 50 ms: its own
+        expect(!FocusReveal.userClickedDuring(secondsSinceClick: 9, secondsSinceOperationStart: 0.4))     // before it
+    }
+}
+
+/// The overview only lists used workspaces and the first free one: ⇧ + digit sends the
+/// selected window to any workspace (3 when 1, 4 and the "+" for 2 show).
+struct OverviewDigitTests {
+    func testDigitKeyCodes() {
+        let top = [18, 19, 20, 21, 23, 22, 26, 28, 25, 29]
+        expect(top.map { OverviewModel.workspace(forKeyCode: $0) } == (1...10).map { Optional($0) })
+        let pad = [83, 84, 85, 86, 87, 88, 89, 91, 92, 82]
+        expect(pad.map { OverviewModel.workspace(forKeyCode: $0) } == (1...10).map { Optional($0) })
+        expect(OverviewModel.workspace(forKeyCode: 0) == nil)      // A
+        expect(OverviewModel.workspace(forKeyCode: 49) == nil)     // Space
+    }
+
+    func testShiftDigitSendsSelectedWindow() {
+        expect(OverviewModel.digitAction(keyCode: 20, shift: true, carrying: false, windowSelected: true) == .send(3))
+        expect(OverviewModel.digitAction(keyCode: 20, shift: false, carrying: true, windowSelected: true) == .send(3))
+        expect(OverviewModel.digitAction(keyCode: 29, shift: true, carrying: false, windowSelected: true) == .send(10))
+        // Plain digit, or no window selected (a card): show that workspace.
+        expect(OverviewModel.digitAction(keyCode: 20, shift: false, carrying: false, windowSelected: true) == .show(3))
+        expect(OverviewModel.digitAction(keyCode: 20, shift: true, carrying: false, windowSelected: false) == .show(3))
+        expect(OverviewModel.digitAction(keyCode: 0, shift: true, carrying: false, windowSelected: true) == nil)
+    }
+}

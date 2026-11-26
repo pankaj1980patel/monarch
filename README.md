@@ -129,7 +129,7 @@ While the switcher is open: Tab, ⇧Tab, ← and → move the selection, ↩ or 
 
 ### Overview
 
-Click a window to go to it. Click a card to switch to that workspace. Drag a window onto a card, on any display, to move it there. From the keyboard: arrows select, ⇧ ← / → moves the selected window one card, holding Space while pressing arrows carries it, 1–9 and 0 switch, ↩ goes, Esc closes.
+Click a window to go to it. Click a card to switch to that workspace. Drag a window onto a card, on any display, to move it there. From the keyboard: arrows select, ⇧ ← / → moves the selected window one card, holding Space while pressing arrows carries it, ⇧ 1–9 / 0 sends it to that workspace (any number, even one without a card), 1–9 and 0 switch, ↩ goes, Esc closes.
 
 ### Helpers
 

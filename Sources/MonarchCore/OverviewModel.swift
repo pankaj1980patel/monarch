@@ -27,6 +27,32 @@ public enum OverviewModel {
         return out
     }
 
+    /// Workspace for a digit key, by key code (so ⇧ doesn't turn "1" into "!", and any
+    /// keyboard layout's top row works): 1–9, 0 = 10; the keypad too. Nil for other keys.
+    public static func workspace(forKeyCode code: Int) -> Int? {
+        switch code {
+        case 18, 83: 1
+        case 19, 84: 2
+        case 20, 85: 3
+        case 21, 86: 4
+        case 23, 87: 5
+        case 22, 88: 6
+        case 26, 89: 7
+        case 28, 91: 8
+        case 25, 92: 9
+        case 29, 82: 10
+        default: nil
+        }
+    }
+
+    /// What a digit key does in the overview: with a window selected and ⇧ (or Space) held,
+    /// send that window to workspace N of its display; otherwise show workspace N.
+    public enum DigitAction: Equatable, Sendable { case show(Int), send(Int) }
+    public static func digitAction(keyCode: Int, shift: Bool, carrying: Bool, windowSelected: Bool) -> DigitAction? {
+        guard let n = workspace(forKeyCode: keyCode) else { return nil }
+        return (shift || carrying) && windowSelected ? .send(n) : .show(n)
+    }
+
     public struct Layout: Sendable, Equatable {
         public let cols: Int
         public let cardFrames: [CGRect]     // in the display's own coordinates (top-left origin)

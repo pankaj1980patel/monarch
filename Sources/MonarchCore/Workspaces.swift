@@ -14,12 +14,18 @@ public struct ParkedWindow: Codable, Sendable, Equatable {
     /// Where the window actually ended up when parked (macOS keeps ~30 pt of title bar on
     /// screen). Nil while the park move is still in flight.
     public var px: Double?, py: Double?
+    /// The window wasn't moved: it was minimized, or its app hidden (⌘H), when its workspace
+    /// was left. It still belongs to that workspace; when it wakes up (unminimized, app
+    /// shown) while another workspace shows, its own workspace is shown. Nil in older files.
+    public var asleep: Bool?
 
     public init(ws: Int, scr: String, x: Double, y: Double, w: Double, h: Double, z: Int,
-                px: Double? = nil, py: Double? = nil) {
+                px: Double? = nil, py: Double? = nil, asleep: Bool? = nil) {
         self.ws = ws; self.scr = scr; self.x = x; self.y = y; self.w = w; self.h = h; self.z = z
-        self.px = px; self.py = py
+        self.px = px; self.py = py; self.asleep = asleep
     }
+
+    public var isAsleep: Bool { asleep == true }
 
     public var relativeFrame: CGRect { CGRect(x: x, y: y, width: w, height: h) }
 }
@@ -190,5 +196,42 @@ public enum AppGather {
             }
         }
         return p
+    }
+}
+
+/// Minimized windows and windows of hidden apps (gap: they used to belong to no workspace).
+public enum Sleepers {
+    /// The asleep windows (minimized, or app hidden) on `display` when its workspace is left:
+    /// they're recorded on that workspace, without moving them. `displayOf`: which display a
+    /// window's frame is on.
+    public static func leaving(windows: [(id: UInt32, asleep: Bool, frame: CGRect)], display: UInt32,
+                               isParked: (UInt32) -> Bool, displayOf: (CGRect) -> UInt32?) -> [UInt32] {
+        windows.filter { $0.asleep && !isParked($0.id) && displayOf($0.frame) == display }.map(\.id).sorted()
+    }
+
+    public enum Wake: Equatable, Sendable {
+        /// Still asleep: nothing to do.
+        case stay
+        /// Awake on its own workspace (it's showing): just forget the entry.
+        case forget
+        /// Awake while another workspace shows: show its workspace (like a Dock click).
+        case showWorkspace(Int)
+    }
+
+    /// An asleep window's state changed. `awake`: no longer minimized and its app not hidden.
+    public static func wake(_ e: ParkedWindow, awake: Bool, active: Int) -> Wake {
+        guard awake else { return .stay }
+        return e.ws == active ? .forget : .showWorkspace(e.ws)
+    }
+}
+
+extension WorkspaceState {
+    /// Entries parked on displays that aren't connected (unplugged while Monarch wasn't running
+    /// or was off): nothing can switch to them, so they're brought back. Removed and returned.
+    public mutating func takeOnMissingDisplays(connected: Set<String>) -> [(id: UInt32, entry: ParkedWindow)] {
+        var out: [(id: UInt32, entry: ParkedWindow)] = []
+        for (k, e) in hidden where !connected.contains(e.scr) { if let id = UInt32(k) { out.append((id, e)) } }
+        for o in out { hidden.removeValue(forKey: String(o.id)) }
+        return out.sorted { $0.id < $1.id }
     }
 }

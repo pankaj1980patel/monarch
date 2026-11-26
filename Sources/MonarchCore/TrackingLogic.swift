@@ -298,7 +298,8 @@ extension WorkspaceState {
     public mutating func dropShown(shows: (UInt32) -> Bool, moving: (UInt32) -> Bool = { _ in false }) -> [UInt32] {
         var out: [UInt32] = []
         for k in Array(hidden.keys) {
-            guard let id = UInt32(k), !moving(id), shows(id) else { continue }
+            // Asleep entries were never moved: their windows' frames are on screen by design.
+            guard let id = UInt32(k), hidden[k]?.isAsleep != true, !moving(id), shows(id) else { continue }
             hidden.removeValue(forKey: k)
             out.append(id)
         }
@@ -339,5 +340,78 @@ public enum FocusReveal {
     /// no workspace operation started meanwhile (it owns focus now).
     public static func shouldReveal(stillFocused: Bool, stillParkedOrStranded: Bool, operationSince: Bool) -> Bool {
         stillFocused && stillParkedOrStranded && !operationSince
+    }
+}
+
+extension FocusReveal {
+    /// A parked window got focus while a workspace operation was moving windows (or just
+    /// after). Usually that's the operation's own focus changes, ignored. After a mouse click
+    /// (a Dock or notification click) it's checked again once the operation has finished.
+    public static func recheckAfterOperation(clickedRecently: Bool) -> Bool { clickedRecently }
+
+    /// The click counts only if it came after the operation started: the click that started
+    /// it (an overview card) is the operation's own.
+    public static func clickCounts(secondsSinceClick: Double, secondsSinceOperationStart: Double) -> Bool {
+        secondsSinceClick < 0.6 && secondsSinceClick < secondsSinceOperationStart
+    }
+    public static let recheckDelay = 0.5
+    public static let recheckLimit = 4
+}
+
+/// Which frame of a window to trust when recording where it is.
+public enum CurrentFrame {
+    /// Where a restore in flight takes it, else the window server's live frame, else Monarch's
+    /// cached copy (which can still hold a parked position: recording that as the window's
+    /// home sent it off screen when it came back).
+    public static func best(restoreTarget: CGRect?, live: CGRect?, cached: CGRect) -> CGRect {
+        restoreTarget ?? live ?? cached
+    }
+}
+
+/// Focus at the end of an operation that brings a window back and focuses it.
+public enum FinishFocus {
+    public enum Step: Equatable, Sendable {
+        /// Focus it now.
+        case focus
+        /// Already focused early (as soon as its app restored it): not twice.
+        case nothing
+        /// Its restore failed (it's off screen): focus the top window that shows instead.
+        case topInstead
+    }
+    public static func step(window: UInt32, focusedEarly: UInt32?, restoreFailed: Bool) -> Step {
+        if restoreFailed { return .topInstead }
+        return focusedEarly == window ? .nothing : .focus
+    }
+}
+
+extension FocusReveal {
+    /// macOS handing focus to the next app because the frontmost one was hidden (⌘H) or quit,
+    /// not a request for this window: within `handOffWindow` of the app going away, and no
+    /// click since (a Dock click after it still counts as a request).
+    /// Checked when the reveal is decided (after its wait), not when the focus change arrives:
+    /// macOS reports the next app's focus before it reports the app hidden. So the window covers
+    /// the wait too.
+    public static let handOffWindow = 0.7
+    public static func isHandOff(secondsSinceAppGone: Double, secondsSinceClick: Double, waited: Double = 0) -> Bool {
+        secondsSinceAppGone < handOffWindow + waited && !(secondsSinceClick < secondsSinceAppGone)
+    }
+
+    /// At the end of a workspace operation: leave focus alone if the user clicked something
+    /// after it started (a Dock click while it ran: their pick wins over the operation's).
+    /// At least 50 ms after the start: an operation started by a click (overview) can record
+    /// that click's own time as its start.
+    public static func userClickedDuring(secondsSinceClick: Double, secondsSinceOperationStart: Double) -> Bool {
+        secondsSinceClick < secondsSinceOperationStart - 0.05
+    }
+}
+
+/// After starting, apps are asked for their windows one after another (the frontmost first,
+/// then one every 20 ms after 0.15 s). Until all have answered the window list is incomplete:
+/// a workspace switch then left the windows of apps not found yet on screen. Workspace
+/// operations wait until this time.
+public enum Discovery {
+    public static let answerMargin = 1.5
+    public static func settledAt(start: Double, otherApps: Int) -> Double {
+        start + 0.15 + Double(otherApps) * 0.02 + answerMargin
     }
 }

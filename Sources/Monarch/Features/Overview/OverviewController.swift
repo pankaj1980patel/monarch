@@ -6,6 +6,7 @@ import MonarchCore
 ///
 /// - Click a window: go to its workspace and focus it. Click a card: switch to it.
 ///   Click empty space or right-click: close. Drag a window onto a card (any display): move it.
+/// - ⇧ + digit (or Space + digit) sends the selected window to that workspace, shown or not.
 /// - ← → ↑ ↓ select; ⇧ ← / → moves the selected window one card; hold Space + arrows carries
 ///   it (release Space to drop); ↩ goes; Space on a card switches; 1–9 switch; Esc closes
 ///   (drops a carried window first).
@@ -326,8 +327,13 @@ final class OverviewController {
             if let id = selectedWindow() { goWindow(id) }
             else if isValid(selection) { goCard(selection.screen, selection.card) }
         default:
-            // 1–9, and 0 for workspace 10.
-            if let ch = e.charactersIgnoringModifiers, let digit = Int(ch), (0...9).contains(digit), case let n = digit == 0 ? 10 : digit {
+            // 1–9, and 0 for workspace 10: show it; ⇧ / Space + digit sends the selected window there.
+            guard let action = OverviewModel.digitAction(keyCode: code, shift: shift, carrying: held,
+                                                         windowSelected: selectedWindow() != nil) else { return false }
+            switch action {
+            case let .send(n):
+                sendSelected(to: n)
+            case let .show(n):
                 // The display whose panel has the keyboard (the mouse may be on another one by now).
                 let mouse = AutoFocusManager.cursor()
                 let keyed = screens.first { $0.panel.owns(e.window) }?.display
@@ -335,9 +341,8 @@ final class OverviewController {
                     close()
                     workspaces.switchTo(n, on: d, eventTime: PerformanceMonitor.now())
                 }
-                return true
             }
-            return false
+            return true
         }
         return true
     }
@@ -351,6 +356,17 @@ final class OverviewController {
 
     /// Moves the selected window to the neighbouring card (← →, crossing displays) or the card
     /// above / below; the selection follows the window.
+    /// Sends the selected window to workspace `n` of the display it's listed on (any number,
+    /// not only the cards shown); the overview stays open with it selected on its new card.
+    private func sendSelected(to n: Int) {
+        guard let id = selectedWindow() else { return }
+        let screen = screens[selection.screen]
+        guard screen.cards[selection.card].workspace != n else { return }
+        keepWindow = id
+        workspaces.place(id, on: screen.display, workspace: n)
+        rebuild(initialSelection: false)
+    }
+
     private func shiftWindow(dx: Int, dy: Int) {
         guard let id = selectedWindow() else { return }
         let from = selection
@@ -828,7 +844,7 @@ private final class OverviewView: NSView {
         render(size: size, scale: scale) {
             let header = NSMutableAttributedString(string: name + "   ", attributes: [
                 .font: NSFont.systemFont(ofSize: 22, weight: .bold), .foregroundColor: NSColor.white])
-            header.append(NSAttributedString(string: "click / ↩ go · drag, or hold Space + arrows, to move a window · Esc close", attributes: [
+            header.append(NSAttributedString(string: "click / ↩ go · drag, hold Space + arrows, or ⇧ 1…0, to move a window · Esc close", attributes: [
                 .font: NSFont.systemFont(ofSize: 13), .foregroundColor: NSColor(white: 1, alpha: 0.55)]))
             header.draw(with: NSRect(origin: .zero, size: size), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
         }

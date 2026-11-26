@@ -18,6 +18,14 @@ final class WindowEngine {
     /// a second after Monarch focuses a window itself, that window (the notifications take a few
     /// round trips; a second quick ⌘Tab must already see the first one's pick).
     var focusedID: CGWindowID? { pendingFocusID ?? focusedWindow[frontmostPID] }
+    /// The focused window as macOS last reported it (not a pick Monarch is still making).
+    var confirmedFocusedID: CGWindowID? { focusedWindow[frontmostPID] }
+    /// When the window list is complete after starting (see `start`).
+    private(set) var settledAt: Double = 0
+    /// Seconds until the window list is complete (0 once it is).
+    var settlingFor: Double { max(0, settledAt - PerformanceMonitor.now()) }
+    /// When an app was last hidden (⌘H) or quit: macOS then hands focus to the next app.
+    private(set) var lastAppGoneAt: Double = -.infinity
     private var pendingFocus: (id: CGWindowID, until: Double)?
 
     /// The window Monarch is focusing, until macOS confirms it (at most 1.5 s for ⌘Tab and
@@ -43,6 +51,9 @@ final class WindowEngine {
     func onFocus(_ f: @escaping (CGWindowID) -> Void) { focusListeners.append(f) }
     func onRemove(_ f: @escaping (CGWindowID) -> Void) { removeListeners.append(f) }
     func onUpdate(_ f: @escaping (ManagedWindow) -> Void) { updateListeners.append(f) }
+    /// An app was shown again after ⌘H (its windows come back where they were).
+    private var unhideListeners: [(pid_t) -> Void] = []
+    func onUnhide(_ f: @escaping (pid_t) -> Void) { unhideListeners.append(f) }
     /// Only frame / minimized changes (and new windows), not title-only ones: for work nobody
     /// sees until later (a closed overview's cards), which a ticking terminal title would
     /// otherwise trigger every second.
@@ -68,7 +79,7 @@ final class WindowEngine {
         tokens.append(nc.addObserver(forName: NSWorkspace.didTerminateApplicationNotification, object: nil, queue: .main) { note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
             let pid = app.processIdentifier
-            MainActor.assumeIsolated { self.untrack(pid: pid) }
+            MainActor.assumeIsolated { self.lastAppGoneAt = PerformanceMonitor.now(); self.untrack(pid: pid) }
         })
         tokens.append(nc.addObserver(forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main) { note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
@@ -84,7 +95,8 @@ final class WindowEngine {
                 guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
                 let pid = app.processIdentifier
                 MainActor.assumeIsolated {
-                    if hidden { self.hiddenPIDs.insert(pid) } else { self.hiddenPIDs.remove(pid) }
+                    if hidden { self.hiddenPIDs.insert(pid); self.lastAppGoneAt = PerformanceMonitor.now() }
+                    else if self.hiddenPIDs.remove(pid) != nil { self.unhideListeners.forEach { $0(pid) } }
                 }
             })
         }
@@ -97,6 +109,9 @@ final class WindowEngine {
         }
         let rest = running.filter { $0.processIdentifier != frontmostPID }
         for app in rest { track(pid: app.processIdentifier, name: app.localizedName ?? "?", startNow: false) }
+        // Until every app has been asked for its windows (staggered below) and has had time to
+        // answer, the window list is incomplete: workspace operations wait for it.
+        settledAt = Discovery.settledAt(start: PerformanceMonitor.now(), otherApps: rest.count)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
             guard let self, self.isRunning else { return }
             for (i, app) in rest.enumerated() {

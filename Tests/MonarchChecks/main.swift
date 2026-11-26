@@ -812,5 +812,20 @@ run("FocusRevealTests.testClickOnVisibleWindowOfTheSameAppDoesntSwitch") { Focus
 run("FocusRevealTests.testDockClickStillShowsTheParkedWindow") { FocusRevealTests().testDockClickStillShowsTheParkedWindow() }
 run("FocusRevealTests.testNoRevealAfterAnotherOperationOrOnceShown") { FocusRevealTests().testNoRevealAfterAnotherOperationOrOnceShown() }
 run("FocusRevealTests.testWaits") { FocusRevealTests().testWaits() }
+run("WorkspaceStateMachineTests.testSleepersAreRecordedOnTheWorkspaceLeft") { WorkspaceStateMachineTests().testSleepersAreRecordedOnTheWorkspaceLeft() }
+run("WorkspaceStateMachineTests.testWakingUp") { WorkspaceStateMachineTests().testWakingUp() }
+run("WorkspaceStateMachineTests.testAsleepEntriesAreNeverTakenForShownWindows") { WorkspaceStateMachineTests().testAsleepEntriesAreNeverTakenForShownWindows() }
+run("WorkspaceStateMachineTests.testAsleepFlagIsOptionalInTheFile") { try WorkspaceStateMachineTests().testAsleepFlagIsOptionalInTheFile() }
+run("WorkspaceStateMachineTests.testEntriesOnMissingDisplaysAreTaken") { WorkspaceStateMachineTests().testEntriesOnMissingDisplaysAreTaken() }
+run("WorkspaceStateMachineTests.testSentWindowGoesOnTop") { WorkspaceStateMachineTests().testSentWindowGoesOnTop() }
+run("WorkspaceStateMachineTests.testOnlyClicksDuringTheOperationAreRechecked") { WorkspaceStateMachineTests().testOnlyClicksDuringTheOperationAreRechecked() }
+run("WorkspaceStateMachineTests.testRestoreIsFittedToASmallerDisplay") { WorkspaceStateMachineTests().testRestoreIsFittedToASmallerDisplay() }
+run("WorkspaceStateMachineTests.testRecordedFrameIsTheLiveOne") { WorkspaceStateMachineTests().testRecordedFrameIsTheLiveOne() }
+run("WorkspaceStateMachineTests.testFocusAtTheEndOfAnOperation") { WorkspaceStateMachineTests().testFocusAtTheEndOfAnOperation() }
+run("SimulationFindingsTests.testHidingAnAppIsAHandOffNotARequest") { SimulationFindingsTests().testHidingAnAppIsAHandOffNotARequest() }
+run("SimulationFindingsTests.testClickDuringAnOperationWinsOverItsFocus") { SimulationFindingsTests().testClickDuringAnOperationWinsOverItsFocus() }
+run("SimulationFindingsTests.testOperationsWaitForDiscovery") { SimulationFindingsTests().testOperationsWaitForDiscovery() }
+run("OverviewDigitTests.testDigitKeyCodes") { OverviewDigitTests().testDigitKeyCodes() }
+run("OverviewDigitTests.testShiftDigitSendsSelectedWindow") { OverviewDigitTests().testShiftDigitSendsSelectedWindow() }
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)
