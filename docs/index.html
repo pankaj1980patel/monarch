@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Monarch: a lightweight window manager for macOS</title>
+<meta name="description" content="Monarch is a free, open-source window manager for macOS: keyboard window snapping, ten workspaces per display without Spaces, a ⌘Tab window switcher, an overview and trackpad gestures. Native Swift, no Screen Recording permission.">
+<link rel="canonical" href="https://pankaj1980patel.github.io/monarch/">
+<meta property="og:type" content="website">
+<meta property="og:title" content="Monarch: a lightweight window manager for macOS">
+<meta property="og:description" content="Snapping, ten workspaces per display, a window switcher, an overview and trackpad gestures in one small native app.">
+<meta property="og:url" content="https://pankaj1980patel.github.io/monarch/">
+<meta property="og:image" content="https://pankaj1980patel.github.io/monarch/images/social-preview.png">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareApplication",
+  "name": "Monarch",
+  "operatingSystem": "macOS 15 or later",
+  "applicationCategory": "UtilitiesApplication",
+  "description": "A lightweight window manager for macOS: snapping, workspaces, window switcher, overview and trackpad gestures.",
+  "url": "https://pankaj1980patel.github.io/monarch/",
+  "downloadUrl": "https://github.com/pankaj1980patel/monarch/releases/latest",
+  "softwareVersion": "0.1.0",
+  "license": "https://opensource.org/licenses/MIT",
+  "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" }
+}
+</script>
+<style>
+  :root { --bg:#11141c; --panel:#1a1f2b; --line:#2a3040; --text:#e6e9f0; --muted:#9aa3b5; --accent:#7aa2ff; }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f7f8fb; --panel:#fff; --line:#e1e4ec; --text:#1a1d24; --muted:#5b6475; --accent:#2f5fd8; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:17px/1.6 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; }
+  main { max-width:980px; margin:0 auto; padding:56px 24px 80px; }
+  h1 { font-size:clamp(36px, 6vw, 56px); line-height:1.1; margin:0 0 12px; letter-spacing:-0.02em; }
+  h2 { font-size:26px; margin:56px 0 16px; letter-spacing:-0.01em; }
+  .lead { font-size:20px; color:var(--muted); max-width:680px; margin:0 0 28px; }
+  .buttons { display:flex; flex-wrap:wrap; gap:12px; margin-bottom:12px; }
+  .btn { display:inline-block; padding:12px 20px; border-radius:10px; text-decoration:none; font-weight:600; border:1px solid var(--line); color:var(--text); }
+  .btn.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
+  .note { color:var(--muted); font-size:14px; margin:0 0 36px; }
+  code { font:14px ui-monospace, SFMono-Regular, Menlo, monospace; background:var(--panel); border:1px solid var(--line); border-radius:6px; padding:2px 6px; }
+  img.hero { width:100%; border-radius:14px; border:1px solid var(--line); display:block; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:16px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 20px; }
+  .card h3 { margin:0 0 6px; font-size:18px; }
+  .card p { margin:0; color:var(--muted); font-size:15px; }
+  table { width:100%; border-collapse:collapse; font-size:15px; }
+  td { padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:top; }
+  td:first-child { white-space:nowrap; font-weight:600; width:1%; padding-right:24px; }
+  footer { margin-top:64px; color:var(--muted); font-size:14px; }
+  a { color:var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Monarch</h1>
+  <p class="lead">A lightweight window manager for macOS. Snap windows from the keyboard, give every display ten workspaces without macOS Spaces, switch windows instead of apps with ⌘Tab, and see everything at once in the overview. Free, open source, written in Swift.</p>
+  <div class="buttons">
+    <a class="btn primary" href="https://github.com/pankaj1980patel/monarch/releases/latest">Download for macOS</a>
+    <a class="btn" href="https://github.com/pankaj1980patel/monarch">Source on GitHub</a>
+  </div>
+  <p class="note">macOS 15 or later · or <code>brew install --cask pankaj1980patel/monarch/monarch</code> after <code>brew tap pankaj1980patel/monarch https://github.com/pankaj1980patel/monarch</code></p>
+
+  <img class="hero" src="images/overview.png" alt="Monarch overview: each workspace shown as a card listing its windows, with a plus card for the next empty workspace" width="2000" height="1250">
+
+  <h2>Features</h2>
+  <div class="grid">
+    <div class="card"><h3>Window snapping</h3><p>Halves, quarters, thirds and two-thirds from the keyboard. Press ⌃⌥ ← again to go from ½ to ⅓ to ⅔.</p></div>
+    <div class="card"><h3>Workspaces without Spaces</h3><p>Ten per display, switched instantly with ⌥ 1…9 and ⌥ 0. Windows return exactly where they were, even after a restart.</p></div>
+    <div class="card"><h3>Overview</h3><p>Every workspace on every display as a card. Drag windows between them, or use the keyboard.</p></div>
+    <div class="card"><h3>Window switcher</h3><p>⌘Tab lists windows, not apps, and raises only the one you pick. ⌘` stays in the current workspace.</p></div>
+    <div class="card"><h3>Auto focus</h3><p>Move the mouse to another display and the window you last used there gets focus.</p></div>
+    <div class="card"><h3>Trackpad gestures</h3><p>Four fingers switch workspaces, three fingers up open the overview. A resting thumb is ignored.</p></div>
+  </div>
+
+  <h2>Built to stay out of the way</h2>
+  <table>
+    <tr><td>No polling</td><td>Driven by hotkeys, Accessibility notifications and a listen-only mouse tap. Idle means idle.</td></tr>
+    <tr><td>Privacy</td><td>No screenshots, no Screen Recording permission, no network access. Only Accessibility.</td></tr>
+    <tr><td>Resilient</td><td>Each app gets its own queue with a timeout, so a frozen app can't freeze your window manager.</td></tr>
+    <tr><td>Plain-text config</td><td>One JSON file, checked before it's applied. Every shortcut can be changed or turned off.</td></tr>
+  </table>
+
+  <h2>Get started</h2>
+  <p>Download, move <code>Monarch.app</code> to Applications, right-click it and choose <strong>Open</strong> the first time, then allow it under Privacy &amp; Security → Accessibility. Press <code>⌃⌥ /</code> to see every shortcut.</p>
+  <p>Read the <a href="https://github.com/pankaj1980patel/monarch#readme">full guide</a>, or the <a href="https://github.com/pankaj1980patel/monarch/blob/main/docs/guides/switching-to-monarch.md">switching guide</a> if you're coming from Rectangle, AeroSpace, yabai or Hammerspoon.</p>
+
+  <footer>Monarch is MIT licensed. <a href="blueprint.html">Architecture and roadmap</a>.</footer>
+</main>
+</body>
+</html>
