@@ -74,13 +74,28 @@ final class WorkspaceManager {
             }
             save()
         }
-        // A parked window got focus (Dock click, notification, app switch): show its workspace.
+        // A parked window got focus (Dock click, notification, app switch): show its workspace,
+        // if it's still focused a moment later (see `FocusReveal`: clicking a visible window of
+        // the same app first reports the app's parked window as focused).
         engine.onFocus { [unowned self] id in
             // Not while an operation is moving windows (or just after): those focus changes are
             // its own, however slow the app is to report them.
             guard isActive, opsInFlight == 0, PerformanceMonitor.now() - max(lastSwitch, lastOpEnd) > 0.3,
                   state.isParked(id) || isStranded(id) else { return }
-            reveal(id)
+            let delay = FocusReveal.delay(clickedVisibleWindowOfSameApp: clickedVisibleWindow(ofAppOf: id))
+            let since = PerformanceMonitor.now()
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                guard let self, self.isActive else { return }
+                let ok = FocusReveal.shouldReveal(stillFocused: self.engine.focusedID == id,
+                                                  stillParkedOrStranded: self.state.isParked(id) || self.isStranded(id),
+                                                  operationSince: max(self.lastSwitch, self.lastOpEnd) > since || self.opsInFlight > 0)
+                if ok {
+                    Log.info(.workspaces, "\(self.who(id)) on a hidden workspace got focus: showing it")
+                    self.reveal(id)
+                } else if self.engine.focusedID != id {
+                    Log.info(.workspaces, "\(self.who(id)) got focus in passing (its app was brought forward): staying")
+                }
+            }
         }
         bridge.onCommand = { [unowned self] c in if isActive { handle(c) } }
     }
@@ -876,6 +891,16 @@ final class WorkspaceManager {
         for d in displays.displays where d.id != display.id {
             if let top = visibleWindows(on: d, live: live).first { focus?(top, "12 workspace: switch → focused", eventTime); return }
         }
+    }
+
+    /// True if the mouse was just clicked (within 0.6 s) on a visible window of the same app as
+    /// `id`: the click brought the app forward, so focus is about to move to that window.
+    private func clickedVisibleWindow(ofAppOf id: CGWindowID) -> Bool {
+        guard CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: .leftMouseDown) < 0.6,
+              let pid = engine.windows[id]?.pid,
+              let under = WindowList.topWindow(at: AutoFocusManager.cursor()), under != id,
+              engine.windows[under]?.pid == pid else { return false }
+        return !state.isParked(under)
     }
 
     /// "1234 (Safari)" for logs: window id and app name, never the title.

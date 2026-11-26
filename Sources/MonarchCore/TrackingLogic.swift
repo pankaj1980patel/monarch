@@ -318,3 +318,26 @@ extension WorkspaceState {
         return out.sorted { $0.id < $1.id }
     }
 }
+
+/// A parked window got focus. That's a request to show it (Dock click, notification, app
+/// switch), or just macOS bringing its app forward: clicking a visible window of an app first
+/// reports the app's previous window as focused (one parked on another workspace), then the
+/// window clicked. Revealing on the first report switched workspace on every such click.
+/// So the reveal waits a moment and happens only if the parked window is still focused.
+public enum FocusReveal {
+    /// The usual wait: long enough for the clicked window's focus report to arrive.
+    public static let wait = 0.3
+    /// The wait right after a click on a visible window of the same app (a slow app can take
+    /// longer to report the window that was clicked).
+    public static let waitAfterClick = 0.8
+
+    public static func delay(clickedVisibleWindowOfSameApp: Bool) -> Double {
+        clickedVisibleWindowOfSameApp ? waitAfterClick : wait
+    }
+
+    /// After the wait: reveal only if the window is still the focused one, still parked, and
+    /// no workspace operation started meanwhile (it owns focus now).
+    public static func shouldReveal(stillFocused: Bool, stillParkedOrStranded: Bool, operationSince: Bool) -> Bool {
+        stillFocused && stillParkedOrStranded && !operationSince
+    }
+}

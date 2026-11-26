@@ -808,5 +808,9 @@ run("AppGatherTests.testGatherOnAHiddenWorkspaceParksThemAll") { AppGatherTests(
 run("AppGatherTests.testWindowsOnAnotherDisplayComeOver") { AppGatherTests().testWindowsOnAnotherDisplayComeOver() }
 run("AppGatherTests.testAlreadyThereIsLeftAlone") { AppGatherTests().testAlreadyThereIsLeftAlone() }
 run("AppGatherTests.testKeys") { AppGatherTests().testKeys() }
+run("FocusRevealTests.testClickOnVisibleWindowOfTheSameAppDoesntSwitch") { FocusRevealTests().testClickOnVisibleWindowOfTheSameAppDoesntSwitch() }
+run("FocusRevealTests.testDockClickStillShowsTheParkedWindow") { FocusRevealTests().testDockClickStillShowsTheParkedWindow() }
+run("FocusRevealTests.testNoRevealAfterAnotherOperationOrOnceShown") { FocusRevealTests().testNoRevealAfterAnotherOperationOrOnceShown() }
+run("FocusRevealTests.testWaits") { FocusRevealTests().testWaits() }
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

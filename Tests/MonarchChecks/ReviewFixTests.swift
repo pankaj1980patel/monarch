@@ -514,3 +514,27 @@ struct AppGatherTests {
         expect(AppConfiguration().validate().isEmpty)
     }
 }
+
+/// Clicking a visible VS Code window while another VS Code window is parked on workspace 2:
+/// macOS first reports the parked one as focused. That must not switch to workspace 2.
+struct FocusRevealTests {
+    func testClickOnVisibleWindowOfTheSameAppDoesntSwitch() {
+        // Focus moved on to the clicked window before the wait ended.
+        expect(!FocusReveal.shouldReveal(stillFocused: false, stillParkedOrStranded: true, operationSince: false))
+    }
+
+    func testDockClickStillShowsTheParkedWindow() {
+        // Nothing else took focus: the parked window really was asked for.
+        expect(FocusReveal.shouldReveal(stillFocused: true, stillParkedOrStranded: true, operationSince: false))
+    }
+
+    func testNoRevealAfterAnotherOperationOrOnceShown() {
+        expect(!FocusReveal.shouldReveal(stillFocused: true, stillParkedOrStranded: true, operationSince: true))
+        expect(!FocusReveal.shouldReveal(stillFocused: true, stillParkedOrStranded: false, operationSince: false))
+    }
+
+    func testWaits() {
+        expect(FocusReveal.delay(clickedVisibleWindowOfSameApp: true) > FocusReveal.delay(clickedVisibleWindowOfSameApp: false))
+        expect(FocusReveal.wait >= 0.2 && FocusReveal.waitAfterClick <= 1.0)   // a Dock click still feels immediate enough
+    }
+}
