@@ -120,7 +120,9 @@ struct ShortcutTests {
 
     func everyDefaultParsesAndIsUnique() {
         let parsed = Action.allCases.compactMap { Shortcut($0.defaultShortcut) }
-        expect(parsed.count == Action.allCases.count)
+        // Only send-all-to-10 has no default key (⌃⌥⇧ 0 brings back all windows).
+        expect(Action.allCases.filter { $0.defaultShortcut.isEmpty } == [.sendAllToWorkspace10])
+        expect(parsed.count == Action.allCases.count - 1)
         expect(Set(parsed).count == parsed.count)
     }
 }
@@ -133,7 +135,7 @@ struct ConfigurationTests {
         expect(errors.isEmpty)
         expect(b.first { $0.0 == .snapLeft }?.1 == Shortcut("ctrl+cmd+left"))
         expect(!b.contains { $0.0 == .center })                    // "" disables
-        expect(b.count == Action.allCases.count - 1)
+        expect(b.count == Action.allCases.count - 2)                // and send-all-to-10 has no default
         expect(c.axTimeout == 0.25 && c.snappingEnabled)
     }
 
@@ -358,9 +360,9 @@ struct OverviewTests {
         // An empty active workspace still gets a card.
         let empty = OverviewModel.cards(active: 5, visible: [], parked: [])
         expect(empty.map(\.workspace) == [5, 1] && empty[0].isActive && empty[1].isPlus)
-        // All nine used: no "+" card.
-        let full = OverviewModel.cards(active: 1, visible: [1], parked: (2...9).map { (UInt32($0), $0, 1) })
-        expect(full.count == 9 && !full.contains { $0.isPlus })
+        // All ten used: no "+" card.
+        let full = OverviewModel.cards(active: 1, visible: [1], parked: (2...10).map { (UInt32($0), $0, 1) })
+        expect(full.count == 10 && !full.contains { $0.isPlus })
     }
 
     func testLayoutColumnsAndFit() {
@@ -522,8 +524,9 @@ struct Step9Tests {
         for (a, s) in AppConfiguration().resolvedBindings().bindings { b[a] = s }
         let all = HelpSheet.sections(bindings: b, states: .init(cross: true, hover: false), gestures: true)
         let rows = all.flatMap(\.rows)
-        expect(rows.contains { $0.keys == "⌥ 1…9" })
-        expect(rows.contains { $0.keys == "⌥⇧ 1…9" })
+        expect(rows.contains { $0.keys == "⌥ 1…9, 0" })                 // 0 = workspace 10
+        expect(rows.contains { $0.keys == "⌥⇧ 1…9, 0" })
+        expect(rows.contains { $0.keys == "⌃⌥⇧ 1…9" })                  // no send-all-to-10 key
         expect(rows.contains { $0.keys == "⌃⌥⌘ 1…9" })
         expect(rows.contains { $0.text.hasSuffix("[ON]") } && rows.contains { $0.text.hasSuffix("[OFF]") })
         expect(rows.contains { $0.keys == "⌃⌥ /" } && !rows.contains { $0.keys == "⌃⌥ 1" })
@@ -793,5 +796,17 @@ run("ScrollGuardTests.testSettingDecodes") { try ScrollGuardTests().testSettingD
 run("InterruptedSwitchTests.testParkCutOffLeavesAVisibleWindowThatIsNotParked") { InterruptedSwitchTests().testParkCutOffLeavesAVisibleWindowThatIsNotParked() }
 run("InterruptedSwitchTests.testRestoreCutOffIsBroughtBack") { InterruptedSwitchTests().testRestoreCutOffIsBroughtBack() }
 run("InterruptedSwitchTests.testIneligibleEntriesStay") { InterruptedSwitchTests().testIneligibleEntriesStay() }
+run("LogTests.testBufferKeepsTheNewestLinesInOrder") { LogTests().testBufferKeepsTheNewestLinesInOrder() }
+run("LogTests.testLineFormatIsOneLine") { LogTests().testLineFormatIsOneLine() }
+run("LogTests.testRotation") { LogTests().testRotation() }
+run("TenthWorkspaceTests.testPlusCardOffersWorkspace10") { TenthWorkspaceTests().testPlusCardOffersWorkspace10() }
+run("TenthWorkspaceTests.testZeroKeysAndHelp") { TenthWorkspaceTests().testZeroKeysAndHelp() }
+run("TenthWorkspaceTests.testCtrlOptionCmdABringsBackAll") { TenthWorkspaceTests().testCtrlOptionCmdABringsBackAll() }
+run("TenthWorkspaceTests.testStateAcceptsWorkspace10") { try TenthWorkspaceTests().testStateAcceptsWorkspace10() }
+run("AppGatherTests.testVSCodeFromWorkspace2ComesToTheShowingWorkspace1") { AppGatherTests().testVSCodeFromWorkspace2ComesToTheShowingWorkspace1() }
+run("AppGatherTests.testGatherOnAHiddenWorkspaceParksThemAll") { AppGatherTests().testGatherOnAHiddenWorkspaceParksThemAll() }
+run("AppGatherTests.testWindowsOnAnotherDisplayComeOver") { AppGatherTests().testWindowsOnAnotherDisplayComeOver() }
+run("AppGatherTests.testAlreadyThereIsLeftAlone") { AppGatherTests().testAlreadyThereIsLeftAlone() }
+run("AppGatherTests.testKeys") { AppGatherTests().testKeys() }
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

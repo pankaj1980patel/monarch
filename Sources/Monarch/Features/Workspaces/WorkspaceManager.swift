@@ -127,7 +127,10 @@ final class WorkspaceManager {
         // Moves still queued (a switch just before quitting) finish first: cut off, a restore
         // left its window off screen with no entry, and a park left an entry for a window on
         // screen.
-        if isActive, opsInFlight > 0 || !moves.restoring.isEmpty { drainAppQueues(timeout: 1.5) }
+        if isActive, opsInFlight > 0 || !moves.restoring.isEmpty {
+            Log.info(.workspaces, "quit during a switch: waiting for moves in progress")
+            drainAppQueues(timeout: 1.5)
+        }
         if isActive, keepParked {
             dropEntriesShownOnScreen()
             // Restores that didn't finish: still off screen, and their entries were removed when
@@ -187,7 +190,7 @@ final class WorkspaceManager {
                 }
             }
         }
-        _ = group.wait(timeout: .now() + timeout)
+        if group.wait(timeout: .now() + timeout) == .timedOut { Log.error(.workspaces, "quit: some apps didn't move their windows back in time") }
         // Forget only windows now really on screen: one that couldn't be moved (no permission,
         // a hung app) stays parked and known, for the next launch or Hammerspoon.
         for k in Array(state.hidden.keys) {
@@ -197,6 +200,7 @@ final class WorkspaceManager {
             }
         }
         if state.hidden.isEmpty { state.active.removeAll() }
+        Log.notice(.workspaces, "parked windows brought back" + (state.hidden.isEmpty ? "" : "; \(state.hidden.count) couldn't be moved and stay parked"))
         save()
         flushSave()
     }
@@ -215,6 +219,7 @@ final class WorkspaceManager {
                 let bad = Self.fileURL.appendingPathExtension("corrupt")
                 try? FileManager.default.removeItem(at: bad)
                 try? FileManager.default.moveItem(at: Self.fileURL, to: bad)
+                Log.error(.workspaces, "workspaces.json unreadable: moved aside to workspaces.json.corrupt")
                 hud.toast("workspaces.json was unreadable: windows brought back", on: mouseDisplay())
             }
         }
@@ -228,7 +233,10 @@ final class WorkspaceManager {
         let alive = Self.existingWindowIDs()
         let before = oldBoot ? -1 : state.hidden.count
         state.hidden = state.hidden.filter { UInt32($0.key).map(alive.contains) ?? false }
-        dropEntriesShownOnScreen()                      // a park cut off by a quit: it shows, so not parked
+        let shown = state.dropShown(shows: { [self] id in WindowList.frame(of: id).map { !isOffScreen($0) } ?? false })
+        Log.info(.workspaces, "loaded \(state.hidden.count) parked window(s)"
+                 + (state.boot != savedBoot && savedBoot != nil ? " (entries from an earlier boot dropped)" : "")
+                 + (shown.isEmpty ? "" : ", \(shown.count) dropped: on screen"))
         if state.hidden.count != before || !FileManager.default.fileExists(atPath: Self.fileURL.path) { save() }
     }
 
@@ -253,7 +261,8 @@ final class WorkspaceManager {
         if let n = action.switchWorkspace, let d = mouseDisplay() { switchTo(n, on: d, eventTime: eventTime) }
         else if let n = action.moveWorkspace { moveFocused(to: n, eventTime: eventTime) }
         else if let n = action.sendAllWorkspace, let d = mouseDisplay() { sendAll(to: n, from: d, eventTime: eventTime) }
-        else if action == .restoreAllWindows { restoreAll(); hud.toast("All windows back", on: mouseDisplay()) }
+        else if let n = action.gatherAppWorkspace { gatherApp(to: n, eventTime: eventTime) }
+        else if action.isRestoreAll { restoreAll(); hud.toast("All windows back", on: mouseDisplay()) }
     }
 
     private func handle(_ c: HammerspoonBridge.Command) {
@@ -301,6 +310,7 @@ final class WorkspaceManager {
         state.active[uuid] = n
         let top = focusID ?? restores.last?.0
         let seq = ops.begin(displays: [uuid], windows: parks + restores.map(\.0))
+        Log.info(.workspaces, "#\(seq) switch \(cur) → \(n) on \(display.name): park \(parks.count), restore \(restores.count)")
 
         run(seq: seq, parks: parks, home: display, restores: restores, focusOn: top, focusSince: eventTime, previous: previous) { [weak self] in
             guard let self else { return }
@@ -352,6 +362,7 @@ final class WorkspaceManager {
             state.hidden[String(id)] = entry(for: f, ws: n, display: display, z: z + 1)
         }
         let seq = ops.begin(displays: [display.uuid], windows: ids)
+        Log.info(.workspaces, "#\(seq) send all \(ids.count) window(s) on \(display.name) from \(cur) to \(n)")
         run(seq: seq, parks: ids, home: display, restores: []) { [weak self] in
             guard let self else { return }
             self.save()
@@ -359,6 +370,58 @@ final class WorkspaceManager {
             self.perf.record("13 workspace: send all total", since: eventTime)
         }
         hud.flash(on: display, state: state, from: nil, target: n)
+    }
+
+    /// ⌃⇧ N: every window of the focused app (on any workspace or display) to workspace `n`
+    /// of the focused window's display. If `n` is showing there they all appear there;
+    /// otherwise they're all parked on `n` (the screen stays, like ⌥⇧ N).
+    func gatherApp(to n: Int, eventTime: Double) {
+        guard let fid = engine.focusedID, let fw = engine.windows[fid] else { return }
+        let list = displays.displays
+        let live = Live(WindowList.onScreen())
+        let target: Display
+        if let e = state.parked(fid), let d = display(e.scr) { target = d }
+        else if let d = currentFrame(fid, live).flatMap({ Geometry.display(for: $0, in: list) }) ?? mouseDisplay() { target = d }
+        else { return }
+        let active = state.activeWorkspace(target.uuid)
+
+        // The app's windows, top-most first: showing ones in window-server order, then parked
+        // ones by their stack position. Minimized windows stay where they are.
+        let appWindows = engine.windows.values.filter { $0.pid == fw.pid && !$0.isMinimized && !moves.isParking($0.id) }
+        let rank = Dictionary(live.order.enumerated().map { ($0.element, $0.offset) }, uniquingKeysWith: { a, _ in a })
+        var located: [(id: UInt32, location: AppGather.Location, key: Int)] = []
+        for w in appWindows {
+            if let e = state.parked(w.id) {
+                located.append((w.id, .parked(e), 100_000 + e.z))
+            } else if let f = currentFrame(w.id, live), !isOffScreen(f), let d = Geometry.display(for: f, in: list) {
+                located.append((w.id, .shown(on: d, frame: f), rank[w.id] ?? 50_000))
+            }
+        }
+        located.sort { $0.key < $1.key }
+        let plan = AppGather.plan(windows: located.map { ($0.id, $0.location) }, focused: fid,
+                                  target: target, workspace: n, active: active)
+        let app = engine.apps[fw.pid]?.name ?? "?"
+        guard !plan.isEmpty else { hud.flash(on: target, state: state, from: nil, target: n == active ? nil : n); return }
+        lastSwitch = PerformanceMonitor.now()
+        if plan.parkedOnN > 0 { state.makeRoom(plan.parkedOnN, onTopOf: n, on: target.uuid) }
+        for (id, e) in plan.relabel { state.hidden[String(id)] = e }
+        for (id, e) in plan.park { state.hidden[String(id)] = e }
+        var previous: [CGWindowID: ParkedWindow] = [:]
+        for (id, _) in plan.restore { if let e = state.hidden.removeValue(forKey: String(id)) { previous[id] = e } }
+        let moved = plan.park.map(\.id) + plan.relabel.map(\.id) + plan.restore.map(\.id)
+        let seq = ops.begin(displays: [target.uuid], windows: moved)
+        Log.info(.workspaces, "#\(seq) gather \(moved.count) \(app) window(s) on workspace \(n) of \(target.name)"
+                 + (n == active ? " (showing)" : " (parked)"))
+        run(seq: seq, parks: plan.park.map(\.id), home: target, restores: plan.restore.map { ($0.id, $0.frame) },
+            focusOn: n == active ? fid : nil, focusSince: eventTime, previous: previous) { [weak self] in
+            guard let self else { return }
+            self.save()
+            guard self.ops.isLatest(seq, on: target.uuid) else { return }
+            if n == active { self.focus?(fid, "12 workspace: gather → focused", eventTime) }
+            else { self.focusTopOrNothing(on: target, eventTime: eventTime) }
+        }
+        if plan.restore.isEmpty && plan.park.isEmpty { save() }          // only relabelled: nothing moves
+        hud.flash(on: target, state: state, from: nil, target: n == active ? nil : n)
     }
 
     /// Overview drag: put window `id` on workspace `n` of `target` (visible if `n` is active there).
@@ -443,6 +506,7 @@ final class WorkspaceManager {
     /// Brings a stranded window onto the current workspace of the display under the mouse
     /// (near its top-left, at its own size) and focuses it.
     private func rescue(_ id: CGWindowID, eventTime: Double) {
+        Log.notice(.workspaces, "picked \(who(id)), stranded off screen with no workspace: brought back")
         guard let w = engine.windows[id], let d = mouseDisplay() else { return }
         let rel = CGRect(x: 40, y: 40, width: w.frame.width, height: w.frame.height)
         let frame = Parking.fit(rel, into: d.visibleFrame.size).offsetBy(dx: d.visibleFrame.minX, dy: d.visibleFrame.minY)
@@ -489,6 +553,7 @@ final class WorkspaceManager {
             restores.append((id, Parking.fit(e.relativeFrame, into: d.visibleFrame.size).offsetBy(dx: d.visibleFrame.minX, dy: d.visibleFrame.minY)))
         }
         guard !restores.isEmpty, let home = list.first else { return }
+        Log.notice(.workspaces, "launch rescue: \(restores.count - stuck.count) window(s) stranded off screen, \(stuck.count) parked on the showing workspace: brought back")
         let seq = ops.begin(displays: [], windows: restores.map(\.0))
         run(seq: seq, parks: [], home: home, restores: restores, previous: previous) { [weak self] in self?.save() }
     }
@@ -513,6 +578,7 @@ final class WorkspaceManager {
             restores.append((w.id, Parking.fit(rel, into: d.visibleFrame.size)
                 .offsetBy(dx: d.visibleFrame.minX, dy: d.visibleFrame.minY)))
         }
+        Log.notice(.workspaces, "restore all: \(restores.count) window(s) back, every display on workspace 1")
         state.hidden.removeAll()
         state.active.removeAll()
         guard let home = list.first else { save(); return }
@@ -531,13 +597,15 @@ final class WorkspaceManager {
         restoreWork = nil
         guard arrangement.changed(to: now) == .scheduleRestore else {
             // Blinked back: nothing changed. Windows macOS pulled on screen meanwhile go back.
-            if wasPending { reparkShownLater() }
+            if wasPending { Log.notice(.displays, "displays back as before: workspaces kept"); reparkShownLater() }
             return
         }
+        Log.notice(.displays, "displays changed (\(displays.displays.count) now): restoring windows in 2 s unless they come back")
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isActive else { return }
             self.restoreWork = nil
             guard self.arrangement.settle(Self.signature(self.displays.displays)), !self.state.hidden.isEmpty else { return }
+            Log.notice(.displays, "display change settled: bringing every window back")
             self.restoreAll()
         }
         restoreWork = work
@@ -650,7 +718,10 @@ final class WorkspaceManager {
                 switch outcome {
                 case let .at(spot): self.state.hidden[key]?.px = spot.x; self.state.hidden[key]?.py = spot.y
                 case .movedUnread: break     // it did move: stays parked; the spot is learned from its next frame
-                case .notMoved: self.state.hidden.removeValue(forKey: key)
+                case .notMoved:
+                    if self.state.hidden.removeValue(forKey: key) != nil {
+                        Log.error(.workspaces, "#\(seq) couldn't park \(self.who(id)): stays on screen")
+                    }
                 }
             }
             // A restored window stays "on its way" until it's seen on screen (onUpdate, or the
@@ -662,6 +733,7 @@ final class WorkspaceManager {
                 }
             }
             for id in results.takeFailedRestores() {
+                Log.error(.workspaces, "#\(seq) couldn't restore \(self.who(id)) (app busy, hung or window gone)")
                 self.moves.restoreExpired(id, seq: seq)                      // it didn't move: not on its way
                 guard self.ops.isLatest(seq, for: id) else { continue }       // a newer operation decided since
                 guard let e = previous[id] else { continue }
@@ -804,6 +876,11 @@ final class WorkspaceManager {
         for d in displays.displays where d.id != display.id {
             if let top = visibleWindows(on: d, live: live).first { focus?(top, "12 workspace: switch → focused", eventTime); return }
         }
+    }
+
+    /// "1234 (Safari)" for logs: window id and app name, never the title.
+    private func who(_ id: CGWindowID) -> String {
+        "\(id) (\(engine.windows[id].flatMap { engine.apps[$0.pid]?.name } ?? "?"))"
     }
 
     private func display(_ uuid: String) -> Display? { displays.displays.first { $0.uuid == uuid } }

@@ -47,7 +47,10 @@ enum ScrollBlocker {
     private static func install() {
         let mask = CGEventMask(1) << CGEventType.scrollWheel.rawValue
         guard let tap = CGEvent.tapCreate(tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap,
-                                          eventsOfInterest: mask, callback: callback, userInfo: nil) else { return }
+                                          eventsOfInterest: mask, callback: callback, userInfo: nil) else {
+            Log.error(.gestures, "scroll guard: couldn't create the scroll event tap (Accessibility?)")
+            return
+        }
         guard let source = CFMachPortCreateRunLoopSource(nil, tap, 0) else { CFMachPortInvalidate(tap); return }
         CGEvent.tapEnable(tap: tap, enable: false)               // off until a swipe locks
         state.withLock { $0.clear() }
@@ -65,6 +68,7 @@ enum ScrollBlocker {
         t.start()
         ready.wait()
         installed.store(true, ordering: .relaxed)
+        Log.info(.gestures, "scroll guard ready")
     }
 
     private static func uninstall() {

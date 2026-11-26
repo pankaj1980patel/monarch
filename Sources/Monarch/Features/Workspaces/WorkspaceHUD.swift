@@ -1,7 +1,7 @@
 import AppKit
 import MonarchCore
 
-/// The workspace indicator near the bottom of a screen: 1–9, active filled blue, used bright,
+/// The workspace indicator near the bottom of a screen: 1–9 and 0 (10), active filled blue, used bright,
 /// empty dim, a green ring on the target of ⌥⇧ N. The blue highlight glides from the old
 /// workspace to the new one (Core Animation, on the GPU). One panel, reused.
 @MainActor
@@ -22,7 +22,7 @@ final class WorkspaceHUD {
         digits.message = nil
         digits.needsDisplay = true
 
-        let width = 9 * Self.cell + 2 * Self.pad
+        let width = CGFloat(WorkspaceState.count) * Self.cell + 2 * Self.pad
         place(panel, width: width, on: display)
         highlight.isHidden = false
 
@@ -50,7 +50,7 @@ final class WorkspaceHUD {
         digits.message = text
         digits.needsDisplay = true
         highlight.isHidden = true
-        place(panel, width: 9 * Self.cell + 2 * Self.pad, on: display)
+        place(panel, width: CGFloat(WorkspaceState.count) * Self.cell + 2 * Self.pad, on: display)
         panel.showOpaque()
         Motion.announce(text)
         scheduleHide(after: 0.9)
@@ -125,7 +125,7 @@ final class WorkspaceHUD {
     }
 }
 
-/// Digits 1–9 (or a message) over the sliding highlight.
+/// Digits 1–9 and 0 (workspace 10), or a message, over the sliding highlight.
 @MainActor
 private final class HUDView: NSView {
     var active = 1
@@ -144,7 +144,7 @@ private final class HUDView: NSView {
                 .font: NSFont.systemFont(ofSize: 15, weight: .semibold), .foregroundColor: NSColor.white, .paragraphStyle: para])
             return
         }
-        for i in 1...9 {
+        for i in 1...WorkspaceState.count {
             let x = pad + CGFloat(i - 1) * cell
             if i == target {
                 let ring = NSBezierPath(roundedRect: NSRect(x: x + 3, y: 10, width: cell - 6, height: h - 20), xRadius: 9, yRadius: 9)
@@ -153,7 +153,7 @@ private final class HUDView: NSView {
                 ring.stroke()
             }
             let alpha: CGFloat = i == active ? 1 : (used.contains(i) ? 0.9 : 0.3)
-            ("\(i)" as NSString).draw(in: NSRect(x: x, y: (h - 22) / 2, width: cell, height: 22), withAttributes: [
+            ("\(i % 10)" as NSString).draw(in: NSRect(x: x, y: (h - 22) / 2, width: cell, height: 22), withAttributes: [
                 .font: NSFont.systemFont(ofSize: 17, weight: .bold),
                 .foregroundColor: NSColor(white: 1, alpha: alpha), .paragraphStyle: para])
         }

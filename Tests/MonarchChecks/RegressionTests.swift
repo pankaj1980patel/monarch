@@ -449,7 +449,7 @@ struct WorkspaceRegressionTests {
 
     func testDefaultsAndLookups() {
         var s = WorkspaceState()
-        expect(WorkspaceState.count == 9)
+        expect(WorkspaceState.count == 10)
         expect(s.activeWorkspace("A") == 1 && s.activeWorkspace("") == 1)
         expect(s.active.isEmpty && s.hidden.isEmpty)
         s.active["A"] = 4
@@ -624,11 +624,11 @@ struct OverviewRegressionTests {
         // Parked windows claiming the active workspace are ignored.
         let c = OverviewModel.cards(active: 2, visible: [1], parked: [(9, 2, 1)])
         expect(c.first(where: { $0.isActive })?.windows == [1])
-        // Nine used workspaces: no plus card.
-        let parked = (1...9).filter { $0 != 4 }.map { (id: UInt32($0) * 10, ws: $0, z: 1) }
+        // All ten used workspaces: no plus card.
+        let parked = (1...10).filter { $0 != 4 }.map { (id: UInt32($0) * 10, ws: $0, z: 1) }
         let full = OverviewModel.cards(active: 4, visible: [], parked: parked)
-        expect(full.count == 9 && !full.contains { $0.isPlus })
-        expect(full.map(\.workspace) == Array(1...9))
+        expect(full.count == 10 && !full.contains { $0.isPlus })
+        expect(full.map(\.workspace) == Array(1...10))
         // Active workspace 9, nothing else: plus is workspace 1, placed after.
         let c9 = OverviewModel.cards(active: 9, visible: [], parked: [])
         expect(c9.map(\.workspace) == [9, 1] && c9[1].isPlus)
@@ -1126,9 +1126,9 @@ struct ActionRegressionTests {
             soft(a.isFocusAction == (p == "focus"))
             soft((a.arrangeCount != nil) == (p == "arrange"))
             // switch / move numbers exist only for workspace actions and are in range.
-            if let n = a.switchWorkspace { soft(a.isWorkspaceAction && (1...9).contains(n)) }
-            if let n = a.moveWorkspace { soft(a.isWorkspaceAction && (1...9).contains(n)) }
-            if let n = a.sendAllWorkspace { soft(a.isWorkspaceAction && (1...9).contains(n)) }
+            if let n = a.switchWorkspace { soft(a.isWorkspaceAction && (1...WorkspaceState.count).contains(n)) }
+            if let n = a.moveWorkspace { soft(a.isWorkspaceAction && (1...WorkspaceState.count).contains(n)) }
+            if let n = a.sendAllWorkspace { soft(a.isWorkspaceAction && (1...WorkspaceState.count).contains(n)) }
             soft([a.switchWorkspace, a.moveWorkspace, a.sendAllWorkspace].compactMap { $0 }.count <= 1)
             if let n = a.arrangeCount { soft((0...9).contains(n)) }
             soft([a.isSwitcherAction, a.isWorkspaceAction, a.isFocusAction].filter { $0 }.count <= 1)
@@ -1137,7 +1137,7 @@ struct ActionRegressionTests {
             if a.isFocusAction { focus += 1 }
             if a.arrangeCount != nil { arranges += 1 }
         }
-        soft(switchers == 4 && workspaces == 28 && focus == 7 && arranges == 10)
+        soft(switchers == 4 && workspaces == 42 && focus == 7 && arranges == 10)
         expect(ok)
     }
 
@@ -1145,7 +1145,7 @@ struct ActionRegressionTests {
         var ok = true
         func soft(_ c: @autoclosure () -> Bool, line: Int = #line) { if !c() { ok = false; print("  soft check failed at line \(line)") } }
         var seen = Set<Shortcut>()
-        for a in Action.allCases {
+        for a in Action.allCases where a != .sendAllToWorkspace10 {      // no default key
             let s = Shortcut(a.defaultShortcut)
             soft(s != nil)
             if let s { soft(seen.insert(s).inserted) }
@@ -1158,6 +1158,10 @@ struct ActionRegressionTests {
         soft(Shortcut(Action.showHelp.defaultShortcut)?.description == "⌃⌥ /")
         soft(Shortcut(Action.workspace3.defaultShortcut)?.description == "⌥ 3")
         soft(Shortcut(Action.moveToWorkspace3.defaultShortcut)?.description == "⌥⇧ 3")
+        soft(Shortcut(Action.workspace10.defaultShortcut)?.description == "⌥ 0")
+        soft(Shortcut(Action.moveToWorkspace10.defaultShortcut)?.description == "⌥⇧ 0")
+        soft(Action.workspace10.switchWorkspace == 10 && Action.moveToWorkspace10.moveWorkspace == 10
+             && Action.sendAllToWorkspace10.sendAllWorkspace == 10)
         expect(ok)
     }
 
@@ -1205,8 +1209,9 @@ struct ConfigRegressionTests {
         let e = try decode("{}")
         soft(e == d)
         let r = d.resolvedBindings()
-        soft(r.errors.isEmpty && r.bindings.count == Action.allCases.count)
-        soft(r.bindings.map(\.0) == Action.allCases)                    // in declaration order
+        let bound = Action.allCases.filter { !$0.defaultShortcut.isEmpty }
+        soft(r.errors.isEmpty && r.bindings.count == bound.count)
+        soft(r.bindings.map(\.0) == bound)                              // in declaration order
         expect(ok)
     }
 
@@ -1222,7 +1227,7 @@ struct ConfigRegressionTests {
         expect(r.errors.isEmpty)
         expect(!r.bindings.contains { $0.0 == .snapLeft })
         expect(r.bindings.first { $0.0 == .snapRight }?.1 == Shortcut("ctrl+cmd+right"))
-        expect(r.bindings.count == Action.allCases.count - 1)
+        expect(r.bindings.count == Action.allCases.count - 2)            // and send-all-to-10 has no default
         // An action whose key was removed from the dictionary falls back to its default.
         var m = AppConfiguration()
         m.bindings.removeValue(forKey: "snap.left")
@@ -1243,7 +1248,7 @@ struct ConfigRegressionTests {
         expect(r.errors.count == 3)
         // Bad entries are skipped, the rest still resolve.
         expect(!r.bindings.contains { $0.0 == .snapLeft || $0.0 == .snapTop })
-        expect(r.bindings.count == Action.allCases.count - 2)
+        expect(r.bindings.count == Action.allCases.count - 3)            // and send-all-to-10 has no default
     }
 
     func testGesturesDecoding() throws {
@@ -1452,8 +1457,8 @@ struct HelpRegressionTests {
         expect(s.map(\.title) == ["Auto focus (mouse)", "Snap", "Two screens", "Workspaces (per screen)",
                                   "Switch (raises only one window)", "Helpers"])
         let ws = s.first { $0.title.hasPrefix("Workspaces") }!
-        expect(ws.rows.contains(HelpSheet.Row(keys: "⌥ 1…9", text: "Show workspace N on screen under mouse")))
-        expect(ws.rows.contains(HelpSheet.Row(keys: "⌥⇧ 1…9", text: "Send focused window to workspace N")))
+        expect(ws.rows.contains(HelpSheet.Row(keys: "⌥ 1…9, 0", text: "Show workspace N on screen under mouse (0 = 10)")))
+        expect(ws.rows.contains(HelpSheet.Row(keys: "⌥⇧ 1…9, 0", text: "Send focused window to workspace N")))
         expect(ws.rows.contains(HelpSheet.Row(keys: "⌃⌥⇧ 1…9", text: "Send all windows on screen to workspace N")))
         expect(ws.rows.contains { $0.keys == "4 fingers" } && ws.rows.contains { $0.keys == "3 fingers" })
         expect(ws.rows.contains { $0.text == "Overview (also 3-finger swipe ↑)" && $0.keys == "⌃⌥ Space" })

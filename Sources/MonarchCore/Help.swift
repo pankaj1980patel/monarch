@@ -17,11 +17,13 @@ public enum HelpSheet {
     public static func sections(bindings: [Action: Shortcut], states: States, gestures: Bool) -> [Section] {
         func k(_ a: Action) -> String? { bindings[a]?.description }
         func row(_ a: Action, _ text: String) -> Row? { k(a).map { Row(keys: $0, text: text) } }
-        /// "⌥ 1" … "⌥ 9" as one row "⌥ 1…9", when all nine follow the pattern.
-        func family(_ first: Action, _ last: Action, _ text: String) -> Row? {
+        /// "⌥ 1" … "⌥ 9" as one row "⌥ 1…9", when all nine follow the pattern; "⌥ 1…9, 0" when
+        /// the tenth workspace is on the same modifiers' 0 key.
+        func family(_ first: Action, _ last: Action, _ tenth: Action? = nil, _ text: String) -> Row? {
             guard let a = k(first), let b = k(last), a.hasSuffix("1"), b.hasSuffix("9"),
                   a.dropLast() == b.dropLast() else { return nil }
-            return Row(keys: a + "…9", text: text)
+            let zero = tenth.flatMap(k).map { $0.hasSuffix("0") && $0.dropLast() == a.dropLast() } ?? false
+            return Row(keys: a + "…9" + (zero ? ", 0" : ""), text: text)
         }
         let on = { (b: Bool) in b ? "  [ON]" : "  [OFF]" }
         var out: [Section] = []
@@ -47,13 +49,15 @@ public enum HelpSheet {
             row(.focusNorth, "Focus window above"), row(.focusSouth, "Focus window below"),
             row(.fillToggle, "Full window (keeps other screen usable)")])
         add("Workspaces (per screen)", [
-            family(.workspace1, .workspace9, "Show workspace N on screen under mouse"),
-            family(.moveToWorkspace1, .moveToWorkspace9, "Send focused window to workspace N"),
-            family(.sendAllToWorkspace1, .sendAllToWorkspace9, "Send all windows on screen to workspace N"),
+            family(.workspace1, .workspace9, .workspace10, "Show workspace N on screen under mouse (0 = 10)"),
+            family(.moveToWorkspace1, .moveToWorkspace9, .moveToWorkspace10, "Send focused window to workspace N"),
+            family(.sendAllToWorkspace1, .sendAllToWorkspace9, .sendAllToWorkspace10, "Send all windows on screen to workspace N"),
+            family(.gatherApp1, .gatherApp9, .gatherApp10, "All windows of the focused app to workspace N"),
             gestures ? Row(keys: "4 fingers", text: "Swipe ← next / → previous workspace") : nil,
             row(.toggleOverview, "Overview" + (gestures ? " (also 3-finger swipe ↑)" : "")),
             gestures ? Row(keys: "3 fingers", text: "Swipe ↓ App Exposé (again to close)") : nil,
-            row(.restoreAllWindows, "Bring back all hidden windows")])
+            row(.restoreAllWindows, "Bring back all hidden windows"),
+            row(.restoreAllWindowsAlt, "Bring back all hidden windows")])
         add("Switch (raises only one window)", [
             row(.switcherNext, "Last / next window (all workspaces)"),
             row(.switcherPrevious, "Previous window (all workspaces)"),

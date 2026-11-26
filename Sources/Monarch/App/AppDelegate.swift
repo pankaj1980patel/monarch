@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusText: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Log.notice(.app, "launch: \(Self.versionLine) · pid \(getpid()) · \(ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == monarchAgentLabel ? "login agent" : "started by hand")")
         // A previous run killed while it owned ⌘Tab (SIGKILL, jetsam, force quit) couldn't give
         // it back: give macOS its ⌘Tab now. Monarch takes it again only once its own is ready.
         SystemSwitcher.setSystemEnabled(true)
@@ -97,8 +98,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // them until Monarch can really act on them (see announce()).
         // Granted (again): start fresh. Observers from before a revoke are dead, so the engine
         // was stopped then and is rebuilt now.
-        permissions.onGranted = { [unowned self] in engine.start(); applyBindings(); prewarmOverview() }
-        permissions.onRevoked = { [unowned self] in engine.stop(); applyBindings() }
+        permissions.onGranted = { [unowned self] in Log.notice(.app, "Accessibility allowed"); engine.start(); applyBindings(); prewarmOverview() }
+        permissions.onRevoked = { [unowned self] in Log.error(.app, "Accessibility revoked: shortcuts and workspaces off"); engine.stop(); applyBindings() }
         if permissions.isTrusted { engine.start(); applyBindings(); prewarmOverview() } else { permissions.prompt() }
 
         // Hammerspoon asks after a config reload; answer with the current state.
@@ -116,7 +117,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // bundle id never found it: it isn't a registered app until this copy has quit.)
             guard let pid = (note.object as? String).flatMap({ pid_t($0) }),
                   Self.isAnotherCopy(pid) else { return }
-            MainActor.assumeIsolated { self.restarting = true; NSApp.terminate(nil) }
+            MainActor.assumeIsolated { Log.notice(.app, "handover to pid \(pid)"); self.restarting = true; NSApp.terminate(nil) }
         }
         migrateLoginItem()
 
@@ -130,8 +131,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotkeys.unregisterAll()
         SystemSwitcher.setSystemEnabled(true)      // give ⌘Tab back to macOS
         announce(forceOff: true)
+        Log.notice(.app, restarting ? "quit to restart (parked windows stay parked)" : "quit")
         workspaces.prepareForQuit(keepParked: restarting)
         engine.stop()
+        Log.flush()
     }
 
     /// Wall-clock time since the kernel started this process.
@@ -160,6 +163,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let shortcutErrors = Set(c.resolvedBindings().errors)       // listed as binding errors already
         configErrors = err.map { [$0] } ?? c.validate().filter { !shortcutErrors.contains($0) }
         configWritable = ConfigFile.mayWrite(after: outcome)
+        if configErrors.isEmpty { Log.info(.config, "config.json loaded") }
+        else { Log.error(.config, "config.json problems at launch: \(configErrors.joined(separator: "; "))") }
         // First time: take over the gesture tuning Hammerspoon actually uses. Never when the
         // file couldn't be used: saving would replace the user's (broken) file with defaults.
         if config.gestures == nil, ConfigFile.mayWrite(after: outcome) {
@@ -171,6 +176,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
+    /// "1.2.3 (commit abc1234, build 202611260830) · macOS 26.6.2".
+    static var versionLine: String {
+        let i = Bundle.main.infoDictionary ?? [:]
+        let v = i["CFBundleShortVersionString"] as? String ?? "dev"
+        let b = i["CFBundleVersion"] as? String ?? "?"
+        let c = i["MonarchCommit"] as? String ?? "?"
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        return "Monarch \(v) (commit \(c), build \(b)) · macOS \(os.majorVersion).\(os.minorVersion).\(os.patchVersion)"
+    }
+
+    private func logRegistrations() {
+        let failed = hotkeys.registrations.filter { !$0.value.ok }.map { "\($0.key.rawValue) (\($0.value.shortcut))" }.sorted()
+        if failed.isEmpty { Log.info(.hotkeys, "\(hotkeys.registrations.count) shortcuts registered") }
+        else { Log.error(.hotkeys, "\(failed.count) shortcut(s) failed to register (taken by another app?): \(failed.joined(separator: ", "))") }
+    }
+
     private func applyBindings() {
         // Order matters: take over workspaces (load + save fresh state) before telling
         // Hammerspoon "on", because Hammerspoon mirrors workspaces.json when it hears it.
@@ -179,6 +200,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let (bindings, errors) = config.resolvedBindings()
         bindingErrors = errors
         hotkeys.register(bindings)
+        logRegistrations()
         // A key Hammerspoon still held at this instant can fail to register. Hammerspoon lets
         // go when it hears announce(), so retry the failures once, shortly after.
         if hotkeys.registrations.values.contains(where: { !$0.ok }) {
@@ -186,6 +208,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 MainActor.assumeIsolated {
                     guard let self, self.config.snappingEnabled else { return }
                     self.hotkeys.register(bindings)
+                    self.logRegistrations()
                 }
             }
         }
@@ -309,6 +332,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         perfMenu.addItem(action("Copy Report", #selector(copyReport)))
         perfItem.submenu = perfMenu
         menu.addItem(perfItem)
+        menu.addItem(action("Save Diagnostics Report…", #selector(saveDiagnostics)))
+        menu.addItem(action("Open Log Folder", #selector(openLogFolder)))
 
         menu.addItem(.separator())
         let cross = action("Cross-Screen Focus  ⌃⌥M", #selector(toggleCross))
@@ -357,6 +382,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// edits not reloaded yet) as it is. A file that can't be read or parsed is never written.
     private func saveSetting(_ changes: [String: Bool]) {
         guard configWritable, ConfigurationStore.update(changes) else {
+            Log.error(.config, "setting not saved (config.json unreadable or broken): \(changes)")
             toast.show("Not saved: config.json can't be read (fix it and press ⌃⌥⇧ R)", seconds: 2.5)
             return
         }
@@ -441,6 +467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let problems = err.map { [$0] } ?? c.validate()
         if !problems.isEmpty {
             configErrors = problems
+            Log.error(.config, "reload rejected: \(problems.joined(separator: "; "))")
             let first = problems[0]
             toast.show("config.json not applied: \(first)" + (problems.count > 1 ? " (+\(problems.count - 1) more in the menu)" : ""), seconds: 3)
             return
@@ -451,6 +478,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if config.gestures == nil { config.gestures = GestureConfig() }
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), Float(config.axTimeout))
         applyBindings()
+        Log.notice(.config, "config reloaded")
         toast.show("Config reloaded")
     }
 
@@ -502,6 +530,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openTrackpadSettings() {
         if let url = URL(string: "x-apple.systempreferences:com.apple.Trackpad-Settings.extension") { NSWorkspace.shared.open(url) }
+    }
+
+    @objc private func openLogFolder() {
+        try? FileManager.default.createDirectory(at: Log.folder, withIntermediateDirectories: true)
+        NSWorkspace.shared.open(Log.folder)
+    }
+
+    /// One text file with everything an issue report needs (no window titles), saved in the log
+    /// folder and shown in Finder.
+    @objc private func saveDiagnostics() {
+        let f = DateFormatter(); f.dateFormat = "yyyyMMdd-HHmmss"
+        let url = Log.folder.appendingPathComponent("Monarch-report-\(f.string(from: Date())).txt")
+        let text = diagnosticsReport()
+        try? FileManager.default.createDirectory(at: Log.folder, withIntermediateDirectories: true)
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            Log.info(.app, "diagnostics report saved: \(url.lastPathComponent)")
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } catch {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(text, forType: .string)
+            toast.show("Couldn't save the report: copied to the clipboard instead", seconds: 2.5)
+        }
+    }
+
+    private func diagnosticsReport() -> String {
+        var r: [String] = ["# Monarch diagnostics report", Self.versionLine]
+        func section(_ t: String) { r.append(""); r.append("## " + t) }
+
+        section("System")
+        var size = 0; sysctlbyname("hw.model", nil, &size, nil, 0)
+        var model = [CChar](repeating: 0, count: max(size, 1)); sysctlbyname("hw.model", &model, &size, nil, 0)
+        r.append("Model: \(String(cString: model)) · uptime \(Int(ProcessInfo.processInfo.systemUptime / 60)) min")
+        r.append(String(format: "Monarch: memory %.1f MB · CPU %.2f s · %d windows, %d apps",
+                        PerformanceMonitor.memoryMB(), PerformanceMonitor.cpuSeconds(), engine.windows.count, engine.apps.count))
+        r.append("Accessibility: \(permissions.isTrusted ? "allowed" : "NOT allowed")")
+        r.append("Login agent: \(Self.loginAgent.status == .enabled ? "on" : "off") · this copy: \(ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == monarchAgentLabel ? "login agent" : "started by hand")")
+        r.append("Hammerspoon running: \(WorkspaceManager.hammerspoonRunning ? "yes" : "no") · macOS ⌘Tab on: \(SystemSwitcher.systemEnabled ? "yes" : "no")")
+
+        section("Displays")
+        for d in displays.displays {
+            r.append("\(d.name)\(d.isBuiltin ? " (built-in)" : ""): \(Int(d.frame.width))×\(Int(d.frame.height)) at \(Int(d.frame.minX)),\(Int(d.frame.minY)) · workspace \(workspaces.state.activeWorkspace(d.uuid))")
+        }
+
+        section("Configuration")
+        r.append("Monarch enabled: \(config.snappingEnabled) · cross-screen focus: \(config.crossScreenFocus) · same-app hover: \(config.sameAppHover) · axTimeout \(config.axTimeout)")
+        let problems = configErrors + bindingErrors
+        r.append(problems.isEmpty ? "No config problems" : "Problems: " + problems.joined(separator: "; "))
+        let failed = hotkeys.registrations.filter { !$0.value.ok }.map { "\($0.key.rawValue) (\($0.value.shortcut))" }.sorted()
+        r.append("Shortcuts: \(hotkeys.registrations.count) registered" + (failed.isEmpty ? "" : ", failed: " + failed.joined(separator: ", ")))
+        if let g = config.gestures, let data = try? JSONEncoder().encode(g), let s = String(data: data, encoding: .utf8) { r.append("Gestures: \(s)") }
+
+        section("Gestures")
+        r.append("Running: \(gestures.isRunning) · trackpads: \(gestures.deviceCount) · scroll guard: \(ScrollBlocker.isInstalled ? "ready" : "off")")
+        if !gestures.conflicts.isEmpty { r.append("macOS gesture conflicts: " + gestures.conflicts.joined(separator: "; ")) }
+
+        section("Workspaces")
+        r.append("Active: \(workspaces.isActive) · parked windows: \(workspaces.state.hidden.count)")
+        for d in displays.displays {
+            let n = workspaces.state.hidden.values.filter { $0.scr == d.uuid }.count
+            r.append("\(d.name): showing \(workspaces.state.activeWorkspace(d.uuid)), used \(workspaces.state.used(on: d.uuid).sorted()), \(n) parked")
+        }
+
+        section("Performance (ms: last, median, worst)")
+        r += perf.report()
+
+        section("Recent log (\(Log.fileURL.path))")
+        r += Log.recent()
+        return r.joined(separator: "\n") + "\n"
     }
 
     @objc private func copyReport() {

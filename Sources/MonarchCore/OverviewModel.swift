@@ -21,7 +21,7 @@ public enum OverviewModel {
             let wins = n == active ? visible : by[n]!.sorted { $0.1 < $1.1 }.map(\.0)
             return Card(workspace: n, isPlus: false, isActive: n == active, windows: wins)
         }
-        if let free = (1...9).first(where: { by[$0] == nil }) {
+        if let free = (1...WorkspaceState.count).first(where: { by[$0] == nil }) {
             out.append(Card(workspace: free, isPlus: true, isActive: false, windows: []))
         }
         return out

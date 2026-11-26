@@ -326,7 +326,8 @@ final class OverviewController {
             if let id = selectedWindow() { goWindow(id) }
             else if isValid(selection) { goCard(selection.screen, selection.card) }
         default:
-            if let ch = e.charactersIgnoringModifiers, let n = Int(ch), (1...9).contains(n) {
+            // 1–9, and 0 for workspace 10.
+            if let ch = e.charactersIgnoringModifiers, let digit = Int(ch), (0...9).contains(digit), case let n = digit == 0 ? 10 : digit {
                 // The display whose panel has the keyboard (the mouse may be on another one by now).
                 let mouse = AutoFocusManager.cursor()
                 let keyed = screens.first { $0.panel.owns(e.window) }?.display

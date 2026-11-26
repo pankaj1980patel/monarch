@@ -399,3 +399,118 @@ struct InterruptedSwitchTests {
         expect(s.takeOnShowingWorkspace { _ in false }.isEmpty && s.isParked(5))
     }
 }
+
+/// The log kept for diagnostics reports.
+struct LogTests {
+    func testBufferKeepsTheNewestLinesInOrder() {
+        var b = LogBuffer(capacity: 3)
+        for i in 1...2 { b.append("\(i)") }
+        expect(b.all == ["1", "2"])
+        for i in 3...7 { b.append("\(i)") }
+        expect(b.all == ["5", "6", "7"] && b.count == 3)
+    }
+
+    func testLineFormatIsOneLine() {
+        let l = LogFormat.line(time: "2026-11-26 08:00:00.000", level: "error", category: "workspaces", "a\nb")
+        expect(l == "2026-11-26 08:00:00.000 error [workspaces] a ⏎ b")
+        expect(LogFormat.line(time: "t", level: "info", category: "app", "x") == "t info  [app] x")
+    }
+
+    func testRotation() {
+        expect(!LogFormat.shouldRotate(size: 1000, limit: 1 << 20))
+        expect(LogFormat.shouldRotate(size: 1 << 20, limit: 1 << 20))
+    }
+}
+
+/// Workspace 10 on the 0 key.
+struct TenthWorkspaceTests {
+    func testPlusCardOffersWorkspace10() {
+        let c = OverviewModel.cards(active: 1, visible: [1], parked: (2...9).map { (UInt32($0), $0, 1) })
+        expect(c.last?.isPlus == true && c.last?.workspace == 10)
+    }
+
+    func testZeroKeysAndHelp() {
+        let r = AppConfiguration().resolvedBindings().bindings
+        expect(r.first { $0.0 == .workspace10 }?.1 == Shortcut("alt+0"))
+        expect(r.first { $0.0 == .moveToWorkspace10 }?.1 == Shortcut("alt+shift+0"))
+        expect(r.first { $0.0 == .restoreAllWindows }?.1 == Shortcut("ctrl+alt+shift+0"))   // unchanged
+        expect(!r.contains { $0.0 == .sendAllToWorkspace10 })
+        expect(AppConfiguration().validate().isEmpty)                                         // no duplicate keys
+    }
+
+    func testCtrlOptionCmdABringsBackAll() {
+        let r = AppConfiguration().resolvedBindings().bindings
+        expect(r.first { $0.0 == .restoreAllWindowsAlt }?.1 == Shortcut("ctrl+alt+cmd+a"))
+        expect(Action.restoreAllWindowsAlt.isRestoreAll && Action.restoreAllWindows.isRestoreAll && !Action.workspace1.isRestoreAll)
+        expect(Action.restoreAllWindowsAlt.isWorkspaceAction && Action.restoreAllWindowsAlt.switchWorkspace == nil)
+    }
+
+    func testStateAcceptsWorkspace10() throws {
+        var s = WorkspaceState()
+        s.active["ext"] = 10
+        s.hidden["1"] = ParkedWindow(ws: 10, scr: "ext", x: 0, y: 0, w: 100, h: 100, z: 1)
+        let back = try JSONDecoder().decode(WorkspaceState.self, from: JSONEncoder().encode(s))
+        expect(back.activeWorkspace("ext") == 10 && back.used(on: "ext") == [10])
+    }
+}
+
+/// ⌃⇧ N: every window of the focused app onto workspace N.
+struct AppGatherTests {
+    let laptop = Display(id: 1, name: "Built-in", isBuiltin: true, frame: CGRect(x: 0, y: 0, width: 1512, height: 982),
+                         visibleFrame: CGRect(x: 0, y: 25, width: 1512, height: 957), uuid: "L")
+    let ext = Display(id: 2, name: "Ext", isBuiltin: false, frame: CGRect(x: 1512, y: 0, width: 2560, height: 1440),
+                      visibleFrame: CGRect(x: 1512, y: 25, width: 2560, height: 1415), uuid: "E")
+    func parked(ws: Int, scr: String = "L") -> AppGather.Location {
+        .parked(ParkedWindow(ws: ws, scr: scr, x: 10, y: 10, w: 800, h: 600, z: 1, px: 1500, py: 970))
+    }
+
+    func testVSCodeFromWorkspace2ComesToTheShowingWorkspace1() {
+        // VS Code: focused window on workspace 1 (showing), another parked on workspace 2.
+        let p = AppGather.plan(windows: [(1, .shown(on: laptop, frame: CGRect(x: 100, y: 100, width: 800, height: 600))),
+                                         (2, parked(ws: 2))],
+                               focused: 1, target: laptop, workspace: 1, active: 1)
+        expect(p.park.isEmpty && p.relabel.isEmpty)
+        expect(p.restore.map(\.id) == [2])                          // brought here; the focused one stays
+        expect(p.restore.first?.frame == CGRect(x: 10, y: 35, width: 800, height: 600))
+    }
+
+    func testGatherOnAHiddenWorkspaceParksThemAll() {
+        // ⌃⇧ 3 while workspace 1 shows: both go to workspace 3, the focused one on top.
+        let p = AppGather.plan(windows: [(2, parked(ws: 2)),
+                                         (1, .shown(on: laptop, frame: CGRect(x: 100, y: 100, width: 800, height: 600)))],
+                               focused: 1, target: laptop, workspace: 3, active: 1)
+        expect(p.restore.isEmpty)
+        expect(p.park.map(\.id) == [1] && p.park[0].entry.ws == 3 && p.park[0].entry.z == 1)
+        expect(p.relabel.map(\.id) == [2] && p.relabel[0].entry.ws == 3 && p.relabel[0].entry.z == 2)
+        expect(p.relabel[0].entry.px == 1500)                       // still where it's parked
+        expect(p.parkedOnN == 2)
+    }
+
+    func testWindowsOnAnotherDisplayComeOver() {
+        let p = AppGather.plan(windows: [(1, .shown(on: laptop, frame: CGRect(x: 0, y: 25, width: 800, height: 600))),
+                                         (2, .shown(on: ext, frame: CGRect(x: 1612, y: 125, width: 3000, height: 1200))),
+                                         (3, parked(ws: 4, scr: "E"))],
+                               focused: 1, target: laptop, workspace: 1, active: 1)
+        expect(p.restore.map(\.id) == [2, 3])
+        // Fitted to the laptop's screen.
+        expect(p.restore.allSatisfy { laptop.visibleFrame.contains($0.frame) })
+    }
+
+    func testAlreadyThereIsLeftAlone() {
+        let p = AppGather.plan(windows: [(1, .shown(on: laptop, frame: CGRect(x: 0, y: 25, width: 800, height: 600))),
+                                         (2, parked(ws: 3))],
+                               focused: 1, target: laptop, workspace: 3, active: 1)
+        expect(p.relabel.isEmpty && p.park.map(\.id) == [1])
+        let none = AppGather.plan(windows: [(1, .shown(on: laptop, frame: .zero))], focused: 1, target: laptop, workspace: 1, active: 1)
+        expect(none.isEmpty)
+    }
+
+    func testKeys() {
+        let r = AppConfiguration().resolvedBindings().bindings
+        expect(r.first { $0.0 == .gatherApp1 }?.1 == Shortcut("ctrl+shift+1"))
+        expect(r.first { $0.0 == .gatherApp10 }?.1 == Shortcut("ctrl+shift+0"))
+        expect(Action.gatherApp7.gatherAppWorkspace == 7 && Action.gatherApp10.gatherAppWorkspace == 10)
+        expect(Action.gatherApp1.switchWorkspace == nil && Action.gatherApp1.isWorkspaceAction)
+        expect(AppConfiguration().validate().isEmpty)
+    }
+}

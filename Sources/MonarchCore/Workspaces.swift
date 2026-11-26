@@ -26,9 +26,10 @@ public struct ParkedWindow: Codable, Sendable, Equatable {
 
 /// All workspace state: the active workspace per display, and every parked window.
 public struct WorkspaceState: Codable, Sendable, Equatable {
-    public static let count = 9
+    /// 1–9, and 10 on the 0 key.
+    public static let count = 10
 
-    /// Display UUID -> active workspace (1–9). Missing means 1.
+    /// Display UUID -> active workspace (1–10). Missing means 1.
     public var active: [String: Int] = [:]
     /// Window ID (as a string, like Hammerspoon) -> parked window.
     public var hidden: [String: ParkedWindow] = [:]
@@ -134,5 +135,60 @@ public enum Parking {
     public static func fit(_ rel: CGRect, into size: CGSize) -> CGRect {
         let w = min(rel.width, size.width), h = min(rel.height, size.height)
         return CGRect(x: max(0, min(rel.minX, size.width - w)), y: max(0, min(rel.minY, size.height - h)), width: w, height: h)
+    }
+}
+
+/// ⌃⇧ N: every window of the focused app onto workspace N of one display (the focused
+/// window's), from whatever workspace or display it's on now.
+public enum AppGather {
+    public enum Location: Sendable {
+        /// Showing on a display, at this frame (global).
+        case shown(on: Display, frame: CGRect)
+        /// Parked on a hidden workspace.
+        case parked(ParkedWindow)
+    }
+
+    public struct Plan: Sendable {
+        /// Windows to park now, with their new entries (showing, and N isn't showing on the target).
+        public var park: [(id: UInt32, entry: ParkedWindow)] = []
+        /// Parked windows that only change workspace or display (they stay parked).
+        public var relabel: [(id: UInt32, entry: ParkedWindow)] = []
+        /// Windows to bring onto the target display, to these frames (N is showing there).
+        public var restore: [(id: UInt32, frame: CGRect)] = []
+        public var isEmpty: Bool { park.isEmpty && relabel.isEmpty && restore.isEmpty }
+        /// How many windows end up parked on N (for making room on top of it).
+        public var parkedOnN: Int { park.count + relabel.count }
+    }
+
+    /// `windows`: the app's windows, top-most first (the focused one is put first). `active`:
+    /// the workspace showing on `target`. Sizes are fitted to the target display; the windows
+    /// go on top of N's stack in this order.
+    public static func plan(windows: [(id: UInt32, location: Location)], focused: UInt32,
+                            target: Display, workspace n: Int, active: Int) -> Plan {
+        let ordered = windows.filter { $0.id == focused } + windows.filter { $0.id != focused }
+        let area = target.visibleFrame
+        var p = Plan()
+        for (z, w) in ordered.enumerated() {
+            let rel: CGRect
+            var spot: (Double?, Double?) = (nil, nil)
+            switch w.location {
+            case let .shown(d, f):
+                if n == active && d.uuid == target.uuid { continue }          // already there, showing
+                rel = f.offsetBy(dx: -d.visibleFrame.minX, dy: -d.visibleFrame.minY)
+            case let .parked(e):
+                if e.ws == n && e.scr == target.uuid && n != active { continue } // already there, parked
+                rel = e.relativeFrame
+                spot = (e.px, e.py)
+            }
+            let fitted = Parking.fit(rel, into: area.size)
+            if n == active {
+                p.restore.append((w.id, fitted.offsetBy(dx: area.minX, dy: area.minY)))
+            } else {
+                let e = ParkedWindow(ws: n, scr: target.uuid, x: fitted.minX, y: fitted.minY,
+                                     w: fitted.width, h: fitted.height, z: z + 1, px: spot.0, py: spot.1)
+                if case .parked = w.location { p.relabel.append((w.id, e)) } else { p.park.append((w.id, e)) }
+            }
+        }
+        return p
     }
 }

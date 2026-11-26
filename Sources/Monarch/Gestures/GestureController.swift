@@ -105,9 +105,13 @@ final class GestureController {
     func configure(_ c: GestureConfig, active: Bool) {
         config = c
         bridge.update(config: c)
+        let was = wantRunning
         wantRunning = active && c.enabled && !incompatible
         conflicts = Dock.conflicts()
         if wantRunning { bridge.start() } else { epoch.bump(); handle(bridge.stop(), at: PerformanceMonitor.now()) }
+        if wantRunning != was {
+            Log.notice(.gestures, wantRunning ? "gestures on: \(bridge.deviceCount) trackpad(s)" + (conflicts.isEmpty ? "" : ", \(conflicts.count) macOS gesture conflict(s)") : "gestures off")
+        }
         syncScrollBlocker()
     }
 
@@ -160,6 +164,7 @@ final class GestureController {
     }
 
     private func locked(_ s: SwipeSample, at t: Double) {
+        Log.info(.gestures, "\(s.fingers)-finger \(s.axis == .vertical ? (s.displacement > 0 ? "up" : "down") : (s.displacement > 0 ? "right" : "left")) swipe")
         interactive = .none
         guard s.fingers == 3, s.axis == .vertical else { return }
         let up = s.displacement > 0
@@ -286,6 +291,7 @@ final class GestureController {
     }()
 
     private func note(_ s: String) {
+        Log.info(.gestures, s)
         log.append("\(Self.timeFormat.string(from: Date()))  \(s)")
         if log.count > 16 { log.removeFirst(log.count - 16) }
     }

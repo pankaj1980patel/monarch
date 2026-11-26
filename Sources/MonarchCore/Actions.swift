@@ -48,16 +48,29 @@ public enum Action: String, CaseIterable, Sendable, Codable {
     case workspace1 = "workspace.1", workspace2 = "workspace.2", workspace3 = "workspace.3"
     case workspace4 = "workspace.4", workspace5 = "workspace.5", workspace6 = "workspace.6"
     case workspace7 = "workspace.7", workspace8 = "workspace.8", workspace9 = "workspace.9"
+    case workspace10 = "workspace.10"                          // the 0 key
     case moveToWorkspace1 = "workspace.move.1", moveToWorkspace2 = "workspace.move.2", moveToWorkspace3 = "workspace.move.3"
     case moveToWorkspace4 = "workspace.move.4", moveToWorkspace5 = "workspace.move.5", moveToWorkspace6 = "workspace.move.6"
     case moveToWorkspace7 = "workspace.move.7", moveToWorkspace8 = "workspace.move.8", moveToWorkspace9 = "workspace.move.9"
+    case moveToWorkspace10 = "workspace.move.10"
     // ⌃⌥⇧ N: sends every window showing on the screen under the mouse to workspace N
     case sendAllToWorkspace1 = "workspace.sendAll.1", sendAllToWorkspace2 = "workspace.sendAll.2", sendAllToWorkspace3 = "workspace.sendAll.3"
     case sendAllToWorkspace4 = "workspace.sendAll.4", sendAllToWorkspace5 = "workspace.sendAll.5", sendAllToWorkspace6 = "workspace.sendAll.6"
     case sendAllToWorkspace7 = "workspace.sendAll.7", sendAllToWorkspace8 = "workspace.sendAll.8", sendAllToWorkspace9 = "workspace.sendAll.9"
+    /// No default key: ⌃⌥⇧ 0 brings back all windows.
+    case sendAllToWorkspace10 = "workspace.sendAll.10"
+    // ⌃⇧ N: every window of the focused app to workspace N (0 = 10)
+    case gatherApp1 = "workspace.gatherApp.1", gatherApp2 = "workspace.gatherApp.2", gatherApp3 = "workspace.gatherApp.3"
+    case gatherApp4 = "workspace.gatherApp.4", gatherApp5 = "workspace.gatherApp.5", gatherApp6 = "workspace.gatherApp.6"
+    case gatherApp7 = "workspace.gatherApp.7", gatherApp8 = "workspace.gatherApp.8", gatherApp9 = "workspace.gatherApp.9"
+    case gatherApp10 = "workspace.gatherApp.10"
     case restoreAllWindows = "workspace.restoreAll"
+    /// A second key for the same thing (⌃⌥⌘ A).
+    case restoreAllWindowsAlt = "workspace.restoreAll.alt"
 
     public var isWorkspaceAction: Bool { rawValue.hasPrefix("workspace.") }
+    /// ⌃⌥⇧ 0 or ⌃⌥⌘ A: every hidden window back.
+    public var isRestoreAll: Bool { self == .restoreAllWindows || self == .restoreAllWindowsAlt }
 
     // Overview (custom Mission Control)
     case toggleOverview = "overview.toggle"
@@ -72,6 +85,8 @@ public enum Action: String, CaseIterable, Sendable, Codable {
     }
     /// ⌥⇧ N: the workspace to send the focused window to.
     public var moveWorkspace: Int? { rawValue.hasPrefix("workspace.move.") ? Int(rawValue.dropFirst(15)) : nil }
+    /// ⌃⇧ N: the workspace to gather every window of the focused app on.
+    public var gatherAppWorkspace: Int? { rawValue.hasPrefix("workspace.gatherApp.") ? Int(rawValue.dropFirst(20)) : nil }
     /// ⌃⌥⇧ N: the workspace to send every window on the screen under the mouse to.
     public var sendAllWorkspace: Int? { rawValue.hasPrefix("workspace.sendAll.") ? Int(rawValue.dropFirst(18)) : nil }
 
@@ -116,13 +131,21 @@ public enum Action: String, CaseIterable, Sendable, Codable {
         case .workspace1, .workspace2, .workspace3, .workspace4, .workspace5,
              .workspace6, .workspace7, .workspace8, .workspace9:
             "alt+" + rawValue.dropFirst(10)
+        case .workspace10: "alt+0"
+        case .moveToWorkspace10: "alt+shift+0"
+        case .sendAllToWorkspace10: ""
         case .moveToWorkspace1, .moveToWorkspace2, .moveToWorkspace3, .moveToWorkspace4, .moveToWorkspace5,
              .moveToWorkspace6, .moveToWorkspace7, .moveToWorkspace8, .moveToWorkspace9:
             "alt+shift+" + rawValue.dropFirst(15)
         case .sendAllToWorkspace1, .sendAllToWorkspace2, .sendAllToWorkspace3, .sendAllToWorkspace4, .sendAllToWorkspace5,
              .sendAllToWorkspace6, .sendAllToWorkspace7, .sendAllToWorkspace8, .sendAllToWorkspace9:
             "ctrl+alt+shift+" + rawValue.dropFirst(18)
+        case .gatherApp1, .gatherApp2, .gatherApp3, .gatherApp4, .gatherApp5,
+             .gatherApp6, .gatherApp7, .gatherApp8, .gatherApp9:
+            "ctrl+shift+" + rawValue.dropFirst(20)
+        case .gatherApp10: "ctrl+shift+0"
         case .restoreAllWindows: "ctrl+alt+shift+0"
+        case .restoreAllWindowsAlt: "ctrl+alt+cmd+a"
         case .toggleOverview: "ctrl+alt+space"
         case .showHelp: "ctrl+alt+/"
         case .reloadConfig: "ctrl+alt+shift+r"
