@@ -108,6 +108,7 @@ final class GestureController {
         wantRunning = active && c.enabled && !incompatible
         conflicts = Dock.conflicts()
         if wantRunning { bridge.start() } else { epoch.bump(); handle(bridge.stop(), at: PerformanceMonitor.now()) }
+        ScrollBlocker.setEnabled(wantRunning && c.blockScroll)
     }
 
     /// Re-read native gesture settings (the menu opens; the user may have changed them).

@@ -27,6 +27,9 @@ public struct GestureConfig: Codable, Sendable, Equatable {
     public var thumbArea: ThumbArea = .left
     /// Width of the thumb area at a side, as a fraction of the trackpad's width (0.1…0.5).
     public var thumbAreaWidth = 1.0 / 3
+    /// Drop scroll events while a three- or four-finger swipe is under way (see `ScrollGuard`):
+    /// fingers lifting one by one would otherwise scroll the window under the mouse.
+    public var blockScroll = true
 
     /// True if a contact that landed at `x` (0 = left edge, 1 = right edge) may be a thumb.
     public func inThumbArea(_ x: Float) -> Bool {
@@ -55,6 +58,7 @@ public struct GestureConfig: Codable, Sendable, Equatable {
         thumbRejection = try c.decodeIfPresent(Bool.self, forKey: .thumbRejection) ?? d.thumbRejection
         thumbArea = try c.decodeIfPresent(ThumbArea.self, forKey: .thumbArea) ?? d.thumbArea
         thumbAreaWidth = try c.decodeIfPresent(Double.self, forKey: .thumbAreaWidth) ?? d.thumbAreaWidth
+        blockScroll = try c.decodeIfPresent(Bool.self, forKey: .blockScroll) ?? d.blockScroll
     }
 
     /// The settings Hammerspoon uses from its saved "gesture.cfg" (numbers only, like Hammerspoon).

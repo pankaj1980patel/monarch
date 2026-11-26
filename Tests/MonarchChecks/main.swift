@@ -772,5 +772,12 @@ run("ThumbAreaTests.testBothSides") { ThumbAreaTests().testBothSides() }
 run("ThumbAreaTests.testAnywhere") { ThumbAreaTests().testAnywhere() }
 run("ThumbAreaTests.testWidth") { ThumbAreaTests().testWidth() }
 run("ThumbAreaTests.testDecodingAndValidation") { try ThumbAreaTests().testDecodingAndValidation() }
+run("ScrollGuardTests.testFingersLiftingOneByOneDontScroll") { ScrollGuardTests().testFingersLiftingOneByOneDontScroll() }
+run("ScrollGuardTests.testANewScrollAfterwardsWorks") { ScrollGuardTests().testANewScrollAfterwardsWorks() }
+run("ScrollGuardTests.testThumbAndFingerLeftDownDontScroll") { ScrollGuardTests().testThumbAndFingerLeftDownDontScroll() }
+run("ScrollGuardTests.testOrdinaryScrollingIsNeverTouched") { ScrollGuardTests().testOrdinaryScrollingIsNeverTouched() }
+run("ScrollGuardTests.testLostLiftFrameNeverBlocksForever") { ScrollGuardTests().testLostLiftFrameNeverBlocksForever() }
+run("ScrollGuardTests.testWheelMouseAfterASwipe") { ScrollGuardTests().testWheelMouseAfterASwipe() }
+run("ScrollGuardTests.testSettingDecodes") { try ScrollGuardTests().testSettingDecodes() }
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

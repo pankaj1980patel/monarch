@@ -44,6 +44,8 @@ A thumb resting on the trackpad is ignored during three- and four-finger swipes.
 
 `thumbArea` is `left` (right-handed, the default), `right` (left-handed), `both` or `anywhere`. `thumbAreaWidth` is the width of the area at each side, from 0.1 to 0.5 of the trackpad. Set `"thumbRejection": false` to count every contact as a finger.
 
+While a three- or four-finger swipe is under way, Monarch also stops it from scrolling the window under the mouse. Without this, the last two fingers to lift, or a thumb and one finger left down, would scroll. Set `"blockScroll": false` in `gestures` to turn this off.
+
 ## Design
 
 See [docs/blueprint.html](docs/blueprint.html) for the architecture, performance rules and roadmap.

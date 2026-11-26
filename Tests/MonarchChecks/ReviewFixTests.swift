@@ -192,3 +192,67 @@ struct ThumbAreaTests {
         expect((try? JSONDecoder().decode(GestureConfig.self, from: Data(#"{"thumbArea": "middle"}"#.utf8))) == nil)
     }
 }
+
+/// A three- or four-finger swipe must not also scroll the window under the mouse.
+struct ScrollGuardTests {
+    func testFingersLiftingOneByOneDontScroll() {
+        var g = ScrollGuard()
+        g.frame(locked: true, contacts: 3, now: 0.0)
+        // The gesture ends as fingers lift; two are still moving: macOS would scroll.
+        g.frame(locked: false, contacts: 2, now: 0.1)
+        expect(g.shouldDrop(phase: 1, momentum: 0, now: 0.1))
+        expect(g.shouldDrop(phase: 2, momentum: 0, now: 0.15))
+        g.frame(locked: false, contacts: 0, now: 0.2)
+        expect(g.shouldDrop(phase: 4, momentum: 0, now: 0.3))         // within the tail
+        expect(g.shouldDrop(phase: 0, momentum: 2, now: 0.9))         // coasting
+        expect(g.shouldDrop(phase: 0, momentum: 3, now: 1.2))
+    }
+
+    func testANewScrollAfterwardsWorks() {
+        var g = ScrollGuard()
+        g.frame(locked: true, contacts: 3, now: 0)
+        g.frame(locked: false, contacts: 0, now: 0.2)
+        expect(!g.shouldDrop(phase: 1, momentum: 0, now: 1.0))        // a new two-finger scroll begins
+        expect(!g.shouldDrop(phase: 2, momentum: 0, now: 1.05))
+        expect(!g.shouldDrop(phase: 0, momentum: 2, now: 1.5))        // and its own coasting is kept
+    }
+
+    func testThumbAndFingerLeftDownDontScroll() {
+        var g = ScrollGuard()
+        g.frame(locked: true, contacts: 4, now: 0)
+        g.frame(locked: false, contacts: 2, now: 0.1)                 // gesture over, thumb + one finger down
+        g.frame(locked: false, contacts: 2, now: 0.5)
+        expect(g.shouldDrop(phase: 2, momentum: 0, now: 0.5))
+    }
+
+    func testOrdinaryScrollingIsNeverTouched() {
+        var g = ScrollGuard()
+        g.frame(locked: false, contacts: 2, now: 0)                   // two-finger scroll (or thumb + two)
+        g.frame(locked: false, contacts: 3, now: 0.05)
+        expect(!g.shouldDrop(phase: 1, momentum: 0, now: 0.05))
+        g.frame(locked: false, contacts: 0, now: 0.2)
+        expect(!g.shouldDrop(phase: 0, momentum: 2, now: 0.3))        // its coasting too
+        expect(!g.shouldDrop(phase: 0, momentum: 0, now: 0.3))        // wheel mouse
+    }
+
+    func testLostLiftFrameNeverBlocksForever() {
+        var g = ScrollGuard()
+        g.frame(locked: true, contacts: 3, now: 0)                    // then no more frames
+        expect(g.shouldDrop(phase: 2, momentum: 0, now: 0.2))
+        expect(!g.shouldDrop(phase: 0, momentum: 0, now: 5))          // wheel mouse, long after
+        expect(!g.shouldDrop(phase: 1, momentum: 0, now: 5.1))
+    }
+
+    func testWheelMouseAfterASwipe() {
+        var g = ScrollGuard()
+        g.frame(locked: true, contacts: 3, now: 0)
+        g.frame(locked: false, contacts: 0, now: 0.1)
+        expect(!g.shouldDrop(phase: 0, momentum: 0, now: 0.6))        // after the tail: a mouse wheel scrolls
+    }
+
+    func testSettingDecodes() throws {
+        expect(GestureConfig().blockScroll)
+        let off = try JSONDecoder().decode(GestureConfig.self, from: Data(#"{"blockScroll": false}"#.utf8))
+        expect(!off.blockScroll)
+    }
+}

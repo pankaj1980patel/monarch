@@ -475,6 +475,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             R(keys: "Thumb", text: !g.thumbRejection ? "counted (thumbRejection off)"
                 : g.thumbArea == .anywhere ? "resting thumb ignored anywhere"
                 : "resting thumb ignored in \(g.thumbArea == .both ? "left and right" : g.thumbArea.rawValue) \(Int((g.thumbAreaWidth * 100).rounded()))%"),
+            R(keys: "Scroll", text: !g.blockScroll ? "not blocked (blockScroll off)" : ScrollBlocker.isInstalled ? "blocked during swipes" : "not blocked (couldn't install the scroll tap)"),
             R(keys: "Overview", text: String(format: "full at %.2f travel", g.overviewTravel)),
             R(keys: "Click guard", text: String(format: "%.2f s", g.clickGuard)),
             R(keys: "Dock", text: gestures.dock.describe + (gestures.dock.isWatching ? "" : " (not watching)"))])]
