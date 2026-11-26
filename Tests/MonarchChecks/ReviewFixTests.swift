@@ -170,8 +170,8 @@ struct ThumbAreaTests {
         // Left-handed: the thumb rests on the right, the fingers swipe to its left.
         let thumbRight = t.fingers(3, dy: 0.01, x: 0.3) + [C(id: 9, x: 0.92, y: 0.1)]
         expect(t.lockedFingers(t.run(thumbRight, config: c)) == 3)
-        // The same thumb on the left now counts as a finger.
-        let thumbLeft = t.fingers(3, dy: 0.01, x: 0.45) + [C(id: 9, x: 0.08, y: 0.1)]
+        // A thumb on the left (not in a corner) now counts as a finger.
+        let thumbLeft = t.fingers(3, dy: 0.01, x: 0.45) + [C(id: 9, x: 0.08, y: 0.5)]
         expect(t.lockedFingers(t.run(thumbLeft, frames: 24, config: c)) == 4)
     }
 
@@ -292,13 +292,30 @@ struct ThumbCornerTests {
     func testCornerFollowsTheThumbArea() {
         var c = GestureConfig()
         expect(c.inThumbCorner(0.05, 0.95) && c.inThumbCorner(0.1, 0.05))
+        expect(c.inThumbCorner(0.95, 0.05))                                  // bottom-right too
         expect(!c.inThumbCorner(0.95, 0.95) && !c.inThumbCorner(0.05, 0.5) && !c.inThumbCorner(0.2, 0.95))
+        expect(c.effectiveThumbCorners == [.topLeft, .bottomLeft, .bottomRight])
         c.thumbArea = .right
-        expect(c.inThumbCorner(0.95, 0.95) && !c.inThumbCorner(0.05, 0.95))
+        expect(c.inThumbCorner(0.95, 0.95) && c.inThumbCorner(0.05, 0.05) && !c.inThumbCorner(0.05, 0.95))
         c.thumbArea = .both
         expect(c.inThumbCorner(0.95, 0.05) && c.inThumbCorner(0.05, 0.05))
         c.thumbCorner = 0
         expect(!c.inThumbCorner(0.01, 0.01))
+    }
+
+    func testBottomRightContactIsLeftOut() {
+        // Right-handed default: something resting bottom-right (palm, other hand) moving along.
+        let o = t.run(t.fingers(3, dy: 0.01, x: 0.4) + [C(id: 9, x: 0.95, y: 0.05, dy: 0.01)])
+        expect(t.lockedFingers(o) == 3)
+    }
+
+    func testChosenCorners() throws {
+        let g = try JSONDecoder().decode(GestureConfig.self, from: Data(#"{"thumbCorners": ["topLeft", "bottomRight"]}"#.utf8))
+        expect(g.effectiveThumbCorners == [.topLeft, .bottomRight])
+        expect(g.inThumbCorner(0.05, 0.95) && g.inThumbCorner(0.95, 0.05) && !g.inThumbCorner(0.05, 0.05))
+        var none = GestureConfig(); none.thumbCorners = []
+        expect(!none.inThumbCorner(0.05, 0.95))
+        expect(GestureConfig().thumbCorners == nil)                         // default: from thumbArea
     }
 
     func testCornersOffCountsAMovingCornerContact() {

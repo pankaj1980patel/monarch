@@ -690,8 +690,9 @@ struct MotionConsensusTests {
     }
 
     func testRestingContactOutsideLeftThirdIsAFinger() {
-        // Thumb detection is only in the left third: a still contact elsewhere counts.
-        for (x, y) in [(0.95, 0.95), (0.95, 0.05), (0.5, 0.05), (0.34, 0.5)] as [(Float, Float)] {
+        // Thumb detection is only in the left third (and the corners): a still contact elsewhere
+        // counts. Top-right isn't a thumb corner for a right-handed setup.
+        for (x, y) in [(0.95, 0.95), (0.95, 0.5), (0.5, 0.05), (0.34, 0.5)] as [(Float, Float)] {
             let o = run(fingers(3, dy: 0.01, x: 0.45) + [Contact(id: 9, x: x, y: y)], frames: 24)
             expect(lockedFingers(o) == 4)
         }
@@ -700,12 +701,12 @@ struct MotionConsensusTests {
     func testTwoFingersPlusContactOnTheRightIsThreeFingers() {
         // Without a contact in the left third, nothing is left out (as with thumbRejection off).
         let o = run([Contact(id: 1, x: 0.5, y: 0.5, dy: 0.01), Contact(id: 2, x: 0.6, y: 0.5, dy: 0.01),
-                     Contact(id: 9, x: 0.9, y: 0.1)], frames: 24)
+                     Contact(id: 9, x: 0.9, y: 0.5)], frames: 24)
         expect(lockedFingers(o) == 3)
     }
 
     func testFourFingersPlusContactOnTheRightCancels() {
-        let o = run(fingers(4, dx: -0.01, x: 0.4) + [Contact(id: 9, x: 0.95, y: 0.1)])
+        let o = run(fingers(4, dx: -0.01, x: 0.4) + [Contact(id: 9, x: 0.95, y: 0.5)])
         expect(o.allSatisfy { $0.locked == nil })
     }
 

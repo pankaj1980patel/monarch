@@ -783,6 +783,8 @@ run("ScrollGuardTests.testSettingDecodes") { try ScrollGuardTests().testSettingD
 run("ThumbCornerTests.testCornerThumbMovingWithTheFingersIsLeftOut") { ThumbCornerTests().testCornerThumbMovingWithTheFingersIsLeftOut() }
 run("ThumbCornerTests.testCornerThumbPlusTwoFingersIsAScroll") { ThumbCornerTests().testCornerThumbPlusTwoFingersIsAScroll() }
 run("ThumbCornerTests.testCornerFollowsTheThumbArea") { ThumbCornerTests().testCornerFollowsTheThumbArea() }
+run("ThumbCornerTests.testBottomRightContactIsLeftOut") { ThumbCornerTests().testBottomRightContactIsLeftOut() }
+run("ThumbCornerTests.testChosenCorners") { try ThumbCornerTests().testChosenCorners() }
 run("ThumbCornerTests.testCornersOffCountsAMovingCornerContact") { ThumbCornerTests().testCornersOffCountsAMovingCornerContact() }
 run("ThumbCornerTests.testOffWithThumbRejectionOff") { ThumbCornerTests().testOffWithThumbRejectionOff() }
 run("ThumbCornerTests.testDecodingAndValidation") { try ThumbCornerTests().testDecodingAndValidation() }

@@ -42,7 +42,7 @@ A thumb resting on the trackpad is ignored during three- and four-finger swipes.
 "gestures": { "thumbArea": "left", "thumbAreaWidth": 0.33 }
 ```
 
-`thumbArea` is `left` (right-handed, the default), `right` (left-handed), `both` or `anywhere`. `thumbAreaWidth` is the width of the area at each side, from 0.1 to 0.5 of the trackpad. A contact in a corner on that side (`thumbCorner`, default 0.15 of the width and height, 0 to turn off) is always taken for a resting thumb, even if it moves with the fingers. Set `"thumbRejection": false` to count every contact as a finger.
+`thumbArea` is `left` (right-handed, the default), `right` (left-handed), `both` or `anywhere`. `thumbAreaWidth` is the width of the area at each side, from 0.1 to 0.5 of the trackpad. A contact in a thumb corner is always taken for a resting thumb or palm, even if it moves with the fingers. By default the corners are both left corners and the bottom-right one (mirrored for `right`, all four for `both` / `anywhere`). Pick them yourself with `"thumbCorners": ["topLeft", "bottomLeft", "bottomRight"]` (also `topRight`), and set their size with `thumbCorner` (default 0.15 of the width and height, 0 to turn off). Set `"thumbRejection": false` to count every contact as a finger.
 
 While a three- or four-finger swipe is under way, Monarch also stops it from scrolling the window under the mouse. Without this, the last two fingers to lift, or a thumb and one finger left down, would scroll. Set `"blockScroll": false` in `gestures` to turn this off.
 

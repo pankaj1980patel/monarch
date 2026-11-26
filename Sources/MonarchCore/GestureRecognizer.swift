@@ -27,22 +27,45 @@ public struct GestureConfig: Codable, Sendable, Equatable {
     public var thumbArea: ThumbArea = .left
     /// Width of the thumb area at a side, as a fraction of the trackpad's width (0.1…0.5).
     public var thumbAreaWidth = 1.0 / 3
-    /// A contact that lands in a corner of the thumb area (this fraction of the width from the
-    /// side, and of the height from the top or bottom edge) is always a resting thumb, even if
-    /// it moves; 0 turns corners off (0…0.3).
+    /// A contact that lands in one of `thumbCorners` (this fraction of the width from the side
+    /// and of the height from the edge) is always a resting thumb or palm, even if it moves;
+    /// 0 turns corners off (0…0.3).
     public var thumbCorner = 0.15
+    public enum Corner: String, Codable, Sendable, CaseIterable { case topLeft, topRight, bottomLeft, bottomRight }
+    /// Which corners. Nil: from `thumbArea`. Left (right-handed): both left corners and the
+    /// bottom-right one (where the palm or a finger of the other hand rests); right: mirrored;
+    /// both / anywhere: all four.
+    public var thumbCorners: [Corner]?
 
-    /// True if a contact that landed at (`x`, `y`) is in a corner on the thumb area's side(s).
+    public var effectiveThumbCorners: Set<Corner> { Set(Corner.allCases.filter { cornerMask & Self.bit($0) != 0 }) }
+
+    private static func bit(_ c: Corner) -> UInt8 {
+        switch c { case .topLeft: 1; case .topRight: 2; case .bottomLeft: 4; case .bottomRight: 8 }
+    }
+    /// The corners as bits (no allocation: checked on the touch thread every frame).
+    private var cornerMask: UInt8 {
+        if let list = thumbCorners { return list.reduce(0) { $0 | Self.bit($1) } }
+        switch thumbArea {
+        case .left: return 1 | 4 | 8
+        case .right: return 2 | 4 | 8
+        case .both, .anywhere: return 15
+        }
+    }
+
+    /// True if a contact that landed at (`x`, `y`) is in one of the thumb corners. Trackpad
+    /// coordinates: x 0 = left edge, y 0 = bottom edge (a swipe up is positive y).
     public func inThumbCorner(_ x: Float, _ y: Float) -> Bool {
         guard thumbCorner > 0 else { return false }
         let c = Float(thumbCorner)
-        guard y < c || y > 1 - c else { return false }
-        let left = x < c, right = x > 1 - c
-        switch thumbArea {
-        case .left: return left
-        case .right: return right
-        case .both, .anywhere: return left || right
+        let corner: Corner
+        switch (x < c, x > 1 - c, y < c, y > 1 - c) {
+        case (true, _, _, true): corner = .topLeft
+        case (true, _, true, _): corner = .bottomLeft
+        case (_, true, _, true): corner = .topRight
+        case (_, true, true, _): corner = .bottomRight
+        default: return false
         }
+        return cornerMask & Self.bit(corner) != 0
     }
     /// Drop scroll events while a three- or four-finger swipe is under way (see `ScrollGuard`):
     /// fingers lifting one by one would otherwise scroll the window under the mouse.
@@ -77,6 +100,7 @@ public struct GestureConfig: Codable, Sendable, Equatable {
         thumbAreaWidth = try c.decodeIfPresent(Double.self, forKey: .thumbAreaWidth) ?? d.thumbAreaWidth
         blockScroll = try c.decodeIfPresent(Bool.self, forKey: .blockScroll) ?? d.blockScroll
         thumbCorner = try c.decodeIfPresent(Double.self, forKey: .thumbCorner) ?? d.thumbCorner
+        thumbCorners = try c.decodeIfPresent([Corner].self, forKey: .thumbCorners)
     }
 
     /// The settings Hammerspoon uses from its saved "gesture.cfg" (numbers only, like Hammerspoon).
