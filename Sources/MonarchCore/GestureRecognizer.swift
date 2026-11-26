@@ -27,6 +27,23 @@ public struct GestureConfig: Codable, Sendable, Equatable {
     public var thumbArea: ThumbArea = .left
     /// Width of the thumb area at a side, as a fraction of the trackpad's width (0.1…0.5).
     public var thumbAreaWidth = 1.0 / 3
+    /// A contact that lands in a corner of the thumb area (this fraction of the width from the
+    /// side, and of the height from the top or bottom edge) is always a resting thumb, even if
+    /// it moves; 0 turns corners off (0…0.3).
+    public var thumbCorner = 0.15
+
+    /// True if a contact that landed at (`x`, `y`) is in a corner on the thumb area's side(s).
+    public func inThumbCorner(_ x: Float, _ y: Float) -> Bool {
+        guard thumbCorner > 0 else { return false }
+        let c = Float(thumbCorner)
+        guard y < c || y > 1 - c else { return false }
+        let left = x < c, right = x > 1 - c
+        switch thumbArea {
+        case .left: return left
+        case .right: return right
+        case .both, .anywhere: return left || right
+        }
+    }
     /// Drop scroll events while a three- or four-finger swipe is under way (see `ScrollGuard`):
     /// fingers lifting one by one would otherwise scroll the window under the mouse.
     public var blockScroll = true
@@ -59,6 +76,7 @@ public struct GestureConfig: Codable, Sendable, Equatable {
         thumbArea = try c.decodeIfPresent(ThumbArea.self, forKey: .thumbArea) ?? d.thumbArea
         thumbAreaWidth = try c.decodeIfPresent(Double.self, forKey: .thumbAreaWidth) ?? d.thumbAreaWidth
         blockScroll = try c.decodeIfPresent(Bool.self, forKey: .blockScroll) ?? d.blockScroll
+        thumbCorner = try c.decodeIfPresent(Double.self, forKey: .thumbCorner) ?? d.thumbCorner
     }
 
     /// The settings Hammerspoon uses from its saved "gesture.cfg" (numbers only, like Hammerspoon).
@@ -132,7 +150,9 @@ public struct GestureOutput: Sendable, Equatable {
 ///   largest group of contacts that move together (same direction, similar distance). Only a
 ///   contact that landed in the thumb area (`GestureConfig.thumbArea`) can be left out, if it
 ///   rests or moves differently; any other contact counts as a finger, as without thumb
-///   rejection. The group is frozen at the lock.
+///   rejection. A contact that landed in a corner on the thumb area's side
+///   (`GestureConfig.thumbCorner`) is always a thumb, even if it moves with the fingers.
+///   The group is frozen at the lock.
 ///   So thumb + two fingers is a scroll (no group of three: no gesture), thumb + three fingers
 ///   a three-finger swipe, thumb + four fingers a four-finger swipe, and five fingers moving
 ///   together a palm (cancelled). A thumb that swipes along with the others is in the group.
@@ -350,22 +370,28 @@ public struct GestureRecognizer: Sendable {
             rlen[j] = (rvx[j] * rvx[j] + rvy[j] * rvy[j]).squareRoot()
             compat[j] = 0
         }
+        // A contact that landed in a corner of the thumb area is a resting thumb, however it
+        // moves: it's never one of the gesture's fingers.
+        var corner: UInt16 = 0
+        for j in 0..<count where present & (1 << j) != 0 && config.inThumbCorner(sx[j], sy[j]) { corner |= 1 << j }
+        let live = present & ~corner
+        guard live.nonzeroBitCount >= 3 else { return .wait }     // corner thumb + two fingers: a scroll
         // Contacts that may be a thumb. None: every contact is a finger.
         var zone: UInt16 = 0
-        for j in 0..<count where present & (1 << j) != 0 && config.inThumbArea(sx[j]) { zone |= 1 << j }
-        if zone == 0 { return .group(present) }
+        for j in 0..<count where live & (1 << j) != 0 && config.inThumbArea(sx[j]) { zone |= 1 << j }
+        if zone == 0 { return .group(live) }
         // Which pairs move together.
         let minMove = config.lockDistance * Self.consensusMinMove
-        for i in 0..<count where present & (1 << i) != 0 {
-            for j in (i + 1)..<count where present & (1 << j) != 0 && together(i, j, minMove: minMove) {
+        for i in 0..<count where live & (1 << i) != 0 {
+            for j in (i + 1)..<count where live & (1 << j) != 0 && together(i, j, minMove: minMove) {
                 compat[i] |= 1 << j; compat[j] |= 1 << i
             }
         }
         // The largest group whose members all move together (four, else three); among equal
         // groups the one that moved most. At most 2^10 masks, before the lock only.
         var best: UInt16 = 0, bestMove = -1.0
-        for size in stride(from: min(4, present.nonzeroBitCount), through: 3, by: -1) {
-            for m in 1..<(1 << count) where m.nonzeroBitCount == size && UInt16(m) & ~present == 0 {
+        for size in stride(from: min(4, live.nonzeroBitCount), through: 3, by: -1) {
+            for m in 1..<(1 << count) where m.nonzeroBitCount == size && UInt16(m) & ~live == 0 {
                 let mask = UInt16(m)
                 var clique = true, moved = 0.0
                 for j in 0..<count where mask & (1 << j) != 0 {
@@ -391,7 +417,7 @@ public struct GestureRecognizer: Sendable {
         let moved = glen / config.lockDistance                               // group movement, × lockDistance
         let decided = moved >= Self.decideBy && watched
         var group = best
-        for e in 0..<count where present & (1 << e) != 0 && best & (1 << e) == 0 {
+        for e in 0..<count where live & (1 << e) != 0 && best & (1 << e) == 0 {
             if zone & (1 << e) == 0 {                                        // not where a thumb rests: a finger
                 if best.nonzeroBitCount >= 4 { return .cancel }
                 group |= 1 << e

@@ -267,3 +267,58 @@ struct ScrollGuardTests {
         expect(!off.blockScroll)
     }
 }
+
+/// A contact in a corner of the thumb area is a resting thumb, however it moves.
+struct ThumbCornerTests {
+    typealias C = MotionConsensusTests.Contact
+    let t = MotionConsensusTests()
+
+    func testCornerThumbMovingWithTheFingersIsLeftOut() {
+        // Top-left and bottom-left; the thumb drags along with the hand (same direction and
+        // distance), which motion alone would take for a fourth finger.
+        for y: Float in [0.95, 0.05] {
+            let o = t.run(t.fingers(3, dy: 0.01, x: 0.45) + [C(id: 9, x: 0.05, y: y, dy: 0.01)])
+            expect(t.lockedFingers(o) == 3)
+        }
+    }
+
+    func testCornerThumbPlusTwoFingersIsAScroll() {
+        // All three move together, but one is the corner thumb: two fingers, no gesture.
+        let o = t.run([C(id: 1, x: 0.5, y: 0.5, dy: 0.01), C(id: 2, x: 0.6, y: 0.5, dy: 0.01),
+                       C(id: 9, x: 0.05, y: 0.95, dy: 0.01)], frames: 24)
+        expect(o.allSatisfy { $0.locked == nil })
+    }
+
+    func testCornerFollowsTheThumbArea() {
+        var c = GestureConfig()
+        expect(c.inThumbCorner(0.05, 0.95) && c.inThumbCorner(0.1, 0.05))
+        expect(!c.inThumbCorner(0.95, 0.95) && !c.inThumbCorner(0.05, 0.5) && !c.inThumbCorner(0.2, 0.95))
+        c.thumbArea = .right
+        expect(c.inThumbCorner(0.95, 0.95) && !c.inThumbCorner(0.05, 0.95))
+        c.thumbArea = .both
+        expect(c.inThumbCorner(0.95, 0.05) && c.inThumbCorner(0.05, 0.05))
+        c.thumbCorner = 0
+        expect(!c.inThumbCorner(0.01, 0.01))
+    }
+
+    func testCornersOffCountsAMovingCornerContact() {
+        var c = GestureConfig(); c.thumbCorner = 0
+        let o = t.run(t.fingers(3, dy: 0.01, x: 0.45) + [C(id: 9, x: 0.05, y: 0.95, dy: 0.01)], config: c)
+        expect(t.lockedFingers(o) == 4)
+    }
+
+    func testOffWithThumbRejectionOff() {
+        var c = GestureConfig(); c.thumbRejection = false
+        let o = t.run(t.fingers(3, dy: 0.01, x: 0.45) + [C(id: 9, x: 0.05, y: 0.95, dy: 0.01)], config: c)
+        expect(t.lockedFingers(o) == 4)
+    }
+
+    func testDecodingAndValidation() throws {
+        expect(close(GestureConfig().thumbCorner, 0.15))
+        let g = try JSONDecoder().decode(GestureConfig.self, from: Data(#"{"thumbCorner": 0.2}"#.utf8))
+        expect(close(g.thumbCorner, 0.2))
+        var c = AppConfiguration(); var bad = GestureConfig(); bad.thumbCorner = 0.6; c.gestures = bad
+        expect(c.validate().contains { $0.contains("thumbCorner") })
+        expect(c.withDefaultsForOutOfRange().gestures?.thumbCorner == GestureConfig().thumbCorner)
+    }
+}

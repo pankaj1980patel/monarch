@@ -74,6 +74,7 @@ public struct AppConfiguration: Codable, Sendable, Equatable {
             check("lockDistance", g.lockDistance, 0.001...0.2)
             check("overviewTravel", g.overviewTravel, 0.02...1)
             check("thumbAreaWidth", g.thumbAreaWidth, 0.1...0.5)
+            check("thumbCorner", g.thumbCorner, 0...0.3)
         }
         return problems.sorted()
     }
@@ -93,6 +94,7 @@ public struct AppConfiguration: Codable, Sendable, Equatable {
             if !(0.001...0.2).contains(g.lockDistance) { g.lockDistance = d.lockDistance }
             if !(0.02...1).contains(g.overviewTravel) { g.overviewTravel = d.overviewTravel }
             if !(0.1...0.5).contains(g.thumbAreaWidth) { g.thumbAreaWidth = d.thumbAreaWidth }
+            if !(0...0.3).contains(g.thumbCorner) { g.thumbCorner = d.thumbCorner }
             c.gestures = g
         }
         return c

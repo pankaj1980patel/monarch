@@ -780,5 +780,11 @@ run("ScrollGuardTests.testOrdinaryScrollingIsNeverTouched") { ScrollGuardTests()
 run("ScrollGuardTests.testLostLiftFrameNeverBlocksForever") { ScrollGuardTests().testLostLiftFrameNeverBlocksForever() }
 run("ScrollGuardTests.testWheelMouseAfterASwipe") { ScrollGuardTests().testWheelMouseAfterASwipe() }
 run("ScrollGuardTests.testSettingDecodes") { try ScrollGuardTests().testSettingDecodes() }
+run("ThumbCornerTests.testCornerThumbMovingWithTheFingersIsLeftOut") { ThumbCornerTests().testCornerThumbMovingWithTheFingersIsLeftOut() }
+run("ThumbCornerTests.testCornerThumbPlusTwoFingersIsAScroll") { ThumbCornerTests().testCornerThumbPlusTwoFingersIsAScroll() }
+run("ThumbCornerTests.testCornerFollowsTheThumbArea") { ThumbCornerTests().testCornerFollowsTheThumbArea() }
+run("ThumbCornerTests.testCornersOffCountsAMovingCornerContact") { ThumbCornerTests().testCornersOffCountsAMovingCornerContact() }
+run("ThumbCornerTests.testOffWithThumbRejectionOff") { ThumbCornerTests().testOffWithThumbRejectionOff() }
+run("ThumbCornerTests.testDecodingAndValidation") { try ThumbCornerTests().testDecodingAndValidation() }
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)
