@@ -9,6 +9,10 @@
 # signature changes on every build, which would make you re-grant Accessibility each
 # time. So this script creates a local self-signed "Monarch Local Signing" certificate
 # once, in its own keychain (no system password prompt), and signs every build with it.
+# Keep a copy of that keychain: a new certificate means granting Accessibility again (and
+# for anyone who installed a release, a different app identity). If the keychain is missing
+# and MONARCH_SIGNING_BACKUP (a folder with signing.keychain-db and signing-keychain.password)
+# exists, it's restored from there instead of a new certificate being made.
 #
 # Release signing and notarization (optional, for --release). With an Apple Developer account:
 #   MONARCH_DEVELOPER_ID="Developer ID Application: Your Name (TEAMID)"   signs with it instead
@@ -26,6 +30,7 @@ SUPPORT="$HOME/Library/Application Support/Monarch"
 KEYCHAIN="$SUPPORT/signing.keychain-db"
 KEYPASS_FILE="$SUPPORT/signing.pass"
 IDENTITY="Monarch Local Signing"
+SIGNING_BACKUP="${MONARCH_SIGNING_BACKUP:-$HOME/Documents/Work/secrets/monarch/macos-codesign}"
 
 RELEASE=0
 [[ "${1:-}" == "--release" ]] && RELEASE=1
@@ -64,6 +69,10 @@ fi
 # --- signing identity (one time) -------------------------------------------------
 ensure_identity() {
   mkdir -p "$SUPPORT"
+  if [[ ! -f "$KEYCHAIN" && -f "$SIGNING_BACKUP/signing.keychain-db" && -f "$SIGNING_BACKUP/signing-keychain.password" ]]; then
+    echo "→ restoring \"$IDENTITY\" from $SIGNING_BACKUP"
+    (umask 077; cp "$SIGNING_BACKUP/signing.keychain-db" "$KEYCHAIN"; cp "$SIGNING_BACKUP/signing-keychain.password" "$KEYPASS_FILE")
+  fi
   if [[ ! -f "$KEYPASS_FILE" ]]; then
     (umask 077; openssl rand -hex 24 > "$KEYPASS_FILE")
   fi
