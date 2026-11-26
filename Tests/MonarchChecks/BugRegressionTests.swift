@@ -568,11 +568,19 @@ struct BuildScriptTests {
         let url = URL(fileURLWithPath: #filePath).deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("scripts/build-app.sh")
         let script = try String(contentsOf: url, encoding: .utf8)
-        // The build line must not swallow its exit status (`… | grep … || true` did).
-        let buildLines = script.split(separator: "\n").filter { $0.contains("swift build -c release --product") }
+        // Every line that runs the build (not `--show-bin-path` lookups, echoes or comments) must
+        // test its exit status and must not swallow it (`… | grep … || true` did).
+        let lines = script.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespaces) }
+        let buildLines = lines.filter {
+            $0.contains("swift build") && !$0.contains("--show-bin-path") && !$0.hasPrefix("echo") && !$0.hasPrefix("#")
+        }
         expect(!buildLines.isEmpty)
-        expect(buildLines.allSatisfy { !$0.contains("|| true") && !$0.contains("| grep") })
-        expect(script.contains("build failed: nothing installed"))
+        expect(buildLines.allSatisfy { $0.hasPrefix("if ! swift build") && !$0.contains("|| true") && !$0.contains("| grep") })
+        // It builds the app product, and a failure ends the script before anything is installed.
+        expect(script.contains("--product \"$APP_NAME\""))
+        if let fail = lines.firstIndex(of: "echo \"build failed: nothing installed\"") {
+            expect(lines[fail...].prefix(4).contains("exit 1"))
+        } else { expect(false) }
     }
 }
 

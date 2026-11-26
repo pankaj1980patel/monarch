@@ -3,11 +3,18 @@
 #
 #   scripts/build-app.sh            build + install
 #   scripts/build-app.sh --run      build + install + (re)launch
+#   scripts/build-app.sh --release  universal (arm64 + x86_64) build, zipped to dist/, not installed
 #
 # Signing: macOS ties the Accessibility grant to the app's code signature. An ad-hoc
 # signature changes on every build, which would make you re-grant Accessibility each
 # time. So this script creates a local self-signed "Monarch Local Signing" certificate
 # once, in its own keychain (no system password prompt), and signs every build with it.
+#
+# Release signing and notarization (optional, for --release). With an Apple Developer account:
+#   MONARCH_DEVELOPER_ID="Developer ID Application: Your Name (TEAMID)"   signs with it instead
+#   MONARCH_NOTARY_PROFILE=monarch-notary                                 notarizes and staples
+# Create the notary profile once with:
+#   xcrun notarytool store-credentials monarch-notary --apple-id you@example.com --team-id TEAMID
 set -euo pipefail
 
 ROOT=${0:A:h:h}
@@ -20,20 +27,38 @@ KEYCHAIN="$SUPPORT/signing.keychain-db"
 KEYPASS_FILE="$SUPPORT/signing.pass"
 IDENTITY="Monarch Local Signing"
 
+RELEASE=0
+[[ "${1:-}" == "--release" ]] && RELEASE=1
+
 cd "$ROOT"
-echo "→ swift build -c release"
 # A failed build must stop here: otherwise the previous binary would be signed and installed
 # as if it were new.
-BUILD_LOG="$(mktemp -t monarch-build)"
-if ! swift build -c release --product "$APP_NAME" > "$BUILD_LOG" 2>&1; then
-  grep -vE '^\[[0-9]+/[0-9]+\]' "$BUILD_LOG" | tail -40
-  echo "build failed: nothing installed"
-  rm -f "$BUILD_LOG"
-  exit 1
+build() {   # build [triple]: builds the app, prints nothing on success but warnings
+  local args=(-c release --product "$APP_NAME")
+  [[ -n "${1:-}" ]] && args+=(--triple "$1")
+  echo "→ swift build ${args[*]}"
+  local log; log="$(mktemp -t monarch-build)"
+  if ! swift build "${args[@]}" > "$log" 2>&1; then
+    grep -vE '^\[[0-9]+/[0-9]+\]' "$log" | tail -40
+    echo "build failed: nothing installed"
+    rm -f "$log"
+    exit 1
+  fi
+  grep -E 'warning:|error:' "$log" | sort -u | head -20 || true
+  rm -f "$log"
+}
+if (( RELEASE )); then
+  # Two single-architecture builds joined with lipo: a multi-arch `swift build` needs Xcode.
+  BIN="$(mktemp -d)/$APP_NAME"
+  for triple in arm64-apple-macosx15.0 x86_64-apple-macosx15.0; do build "$triple"; done
+  lipo -create -output "$BIN" \
+    "$(swift build -c release --triple arm64-apple-macosx15.0 --show-bin-path)/$APP_NAME" \
+    "$(swift build -c release --triple x86_64-apple-macosx15.0 --show-bin-path)/$APP_NAME"
+  echo "→ universal binary: $(lipo -archs "$BIN")"
+else
+  build
+  BIN="$(swift build -c release --show-bin-path)/$APP_NAME"
 fi
-grep -E 'warning:|error:' "$BUILD_LOG" | sort -u | head -20 || true
-rm -f "$BUILD_LOG"
-BIN="$(swift build -c release --show-bin-path)/$APP_NAME"
 [[ -x "$BIN" ]] || { echo "build failed: no binary"; exit 1; }
 
 # --- signing identity (one time) -------------------------------------------------
@@ -82,6 +107,9 @@ STAGE=$(mktemp -d)/$APP_NAME.app
 mkdir -p "$STAGE/Contents/MacOS" "$STAGE/Contents/Resources" "$STAGE/Contents/Library/LaunchAgents"
 cp "$BIN" "$STAGE/Contents/MacOS/$APP_NAME"
 strip -x "$STAGE/Contents/MacOS/$APP_NAME"
+# The commit this build is from, for logs and diagnostics reports ("-dirty": uncommitted changes).
+COMMIT=$(git -C "$ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)
+if [[ "$COMMIT" != unknown ]] && ! git -C "$ROOT" diff --quiet HEAD -- Sources Package.swift 2>/dev/null; then COMMIT="$COMMIT-dirty"; fi
 cat > "$STAGE/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -94,6 +122,7 @@ cat > "$STAGE/Contents/Info.plist" <<EOF
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>$VERSION</string>
   <key>CFBundleVersion</key><string>$(date +%Y%m%d%H%M)</string>
+  <key>MonarchCommit</key><string>$COMMIT</string>
   <key>LSMinimumSystemVersion</key><string>15.0</string>
   <key>LSUIElement</key><true/>
   <key>NSHighResolutionCapable</key><true/>
@@ -119,6 +148,41 @@ cat > "$STAGE/Contents/Library/LaunchAgents/$BUNDLE_ID.agent.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+
+if (( RELEASE )); then
+  mkdir -p "$ROOT/dist"
+  ZIP="$ROOT/dist/$APP_NAME-$VERSION.zip"
+  rm -f "$ZIP"
+  if [[ -n "${MONARCH_DEVELOPER_ID:-}" ]]; then
+    codesign --force --options runtime --timestamp --sign "$MONARCH_DEVELOPER_ID" --identifier "$BUNDLE_ID" "$STAGE"
+    echo "→ signed with \"$MONARCH_DEVELOPER_ID\""
+    if [[ -n "${MONARCH_NOTARY_PROFILE:-}" ]]; then
+      echo "→ notarizing (this takes a few minutes)"
+      ditto -c -k --keepParent "$STAGE" "$ZIP"
+      xcrun notarytool submit "$ZIP" --keychain-profile "$MONARCH_NOTARY_PROFILE" --wait
+      xcrun stapler staple "$STAGE"
+      rm -f "$ZIP"
+    else
+      echo "  not notarized: set MONARCH_NOTARY_PROFILE to notarize"
+    fi
+  else
+    ensure_identity || true
+    HASH=$(security find-identity -p codesigning 2>/dev/null | awk -v id="\"$IDENTITY\"" '$0 ~ id {print $2; exit}')
+    if [[ -n "$HASH" ]]; then
+      security unlock-keychain -p "$(<"$KEYPASS_FILE")" "$KEYCHAIN"
+      codesign --force --options runtime --sign "$HASH" --identifier "$BUNDLE_ID" "$STAGE"
+      echo "→ signed with \"$IDENTITY\" (not notarized: users must right-click → Open)"
+    else
+      codesign --force --sign - --identifier "$BUNDLE_ID" "$STAGE"
+      echo "→ ad-hoc signed (not notarized: users must right-click → Open)"
+    fi
+  fi
+  ditto -c -k --keepParent "$STAGE" "$ZIP"
+  rm -rf "${STAGE:h}"
+  echo "→ $ZIP"
+  echo "  SHA-256: $(shasum -a 256 "$ZIP" | cut -d' ' -f1)"
+  exit 0
+fi
 
 ensure_identity || true
 # codesign only sees keychains in the user's search list. Adding ours is a one-time step

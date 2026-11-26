@@ -11,3 +11,6 @@ DerivedData/
 
 # Built app (installed to ~/Applications by scripts/build-app.sh)
 *.app
+
+# Release zips (scripts/build-app.sh --release)
+dist/
