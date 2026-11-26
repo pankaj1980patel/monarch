@@ -129,6 +129,17 @@ struct QuitRestoreTests {
         expect(!kills.isEmpty && kills.allSatisfy { $0.contains("-HUP") })
     }
 
+    func testHandoverIdentifiesTheNewCopyByPid() throws {
+        // The agent's copy isn't a registered app while it waits for the handover, so a
+        // bundle-id lookup never found it: the old copy stayed, and launchd restarted the
+        // agent's copy every few seconds.
+        let main = try source("Sources/Monarch/App/main.swift")
+        expect(main.contains("postNotificationName(monarchHandoverNote, object: String(me)"))
+        let app = try source("Sources/Monarch/App/AppDelegate.swift")
+        expect(app.contains("Self.isAnotherCopy(pid)"))
+        expect(!app.contains("runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier"))
+    }
+
     func testQuitBringsParkedWindowsBack() throws {
         let app = try source("Sources/Monarch/App/AppDelegate.swift")
         expect(app.contains("workspaces.prepareForQuit(keepParked: restarting)"))

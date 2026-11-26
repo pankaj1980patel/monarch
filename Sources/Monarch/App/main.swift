@@ -57,7 +57,9 @@ do {
     }
     if !others().isEmpty {
         guard fromAgent else { exit(0) }
-        DistributedNotificationCenter.default().postNotificationName(monarchHandoverNote, object: nil, userInfo: nil, deliverImmediately: true)
+        // Our pid goes with it: this process isn't a registered app yet (NSApplication doesn't
+        // exist until the handover is done), so the other copy can't find it by bundle id.
+        DistributedNotificationCenter.default().postNotificationName(monarchHandoverNote, object: String(me), userInfo: nil, deliverImmediately: true)
         let deadline = Date().addingTimeInterval(3)
         while !others().isEmpty && Date() < deadline { RunLoop.current.run(until: Date().addingTimeInterval(0.05)) }
         // The other copy didn't quit: exit with a failure, so launchd tries again shortly

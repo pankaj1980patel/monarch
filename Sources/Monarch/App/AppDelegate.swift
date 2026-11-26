@@ -109,14 +109,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The agent-managed copy takes over from this one when it starts (see main.swift).
         handoverToken = DistributedNotificationCenter.default().addObserver(
             forName: monarchHandoverNote, object: nil, queue: .main
-        ) { _ in
-            // Any app can post this notification. Quit only if a newer copy of Monarch really
-            // is starting (the agent's), so a stray post can't switch Monarch off.
-            let me = NSRunningApplication.current
-            let newer = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "dev.monarch.Monarch")
-                .contains { $0.processIdentifier != me.processIdentifier && !$0.isTerminated
-                    && ($0.launchDate ?? .distantPast) >= (me.launchDate ?? .distantFuture) }
-            guard newer else { return }
+        ) { note in
+            // Any app can post this notification. Quit only if another copy of Monarch really
+            // is starting (the agent's): the posted pid must be a live process running this
+            // same executable, so a stray post can't switch Monarch off. (Looking it up by
+            // bundle id never found it: it isn't a registered app until this copy has quit.)
+            guard let pid = (note.object as? String).flatMap({ pid_t($0) }),
+                  Self.isAnotherCopy(pid) else { return }
             MainActor.assumeIsolated { self.restarting = true; NSApp.terminate(nil) }
         }
         migrateLoginItem()
@@ -384,6 +383,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             a.informativeText = error.localizedDescription
             a.runModal()
         }
+    }
+
+    /// True if `pid` is another live process running this app's executable.
+    nonisolated static func isAnotherCopy(_ pid: pid_t) -> Bool {
+        guard pid > 0, pid != getpid(), kill(pid, 0) == 0 else { return false }
+        var buf = [CChar](repeating: 0, count: 4 * Int(MAXPATHLEN))
+        guard proc_pidpath(pid, &buf, UInt32(buf.count)) > 0, let mine = Bundle.main.executableURL else { return false }
+        let theirs = URL(fileURLWithPath: String(cString: buf)).resolvingSymlinksInPath().path
+        return theirs == mine.resolvingSymlinksInPath().path
     }
 
     @objc private func openLoginItems() { SMAppService.openSystemSettingsLoginItems() }

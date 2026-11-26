@@ -765,6 +765,7 @@ run("BootSessionTests.testEntriesFromAnEarlierBootAreDropped") { BootSessionTest
 run("BootSessionTests.testSameBootKeepsEverything") { BootSessionTests().testSameBootKeepsEverything() }
 run("BootSessionTests.testFilesWithoutABootAreKeptAndStamped") { try BootSessionTests().testFilesWithoutABootAreKeptAndStamped() }
 run("QuitRestoreTests.testBuildScriptRestartsWithSIGHUP") { try QuitRestoreTests().testBuildScriptRestartsWithSIGHUP() }
+run("QuitRestoreTests.testHandoverIdentifiesTheNewCopyByPid") { try QuitRestoreTests().testHandoverIdentifiesTheNewCopyByPid() }
 run("QuitRestoreTests.testQuitBringsParkedWindowsBack") { try QuitRestoreTests().testQuitBringsParkedWindowsBack() }
 run("ThumbAreaTests.testDefaultIsLeftThird") { ThumbAreaTests().testDefaultIsLeftThird() }
 run("ThumbAreaTests.testRightAreaForLeftHanded") { ThumbAreaTests().testRightAreaForLeftHanded() }
