@@ -25,20 +25,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var config = AppConfiguration()
     private var configErrors: [String] = []
+    /// False while running on defaults because config.json couldn't be used: nothing may be
+    /// saved over the user's file until a reload succeeds.
+    private var configWritable = true
     private var bindingErrors: [String] = []
     private var statusItem: NSStatusItem?
     private var statusText: String?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // A previous run killed while it owned ⌘Tab (SIGKILL, jetsam, force quit) couldn't give
+        // it back: give macOS its ⌘Tab now. Monarch takes it again only once its own is ready.
+        SystemSwitcher.setSystemEnabled(true)
         // Bound every Accessibility call this process makes: a hung app costs at most this long.
         loadConfig()
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), Float(config.axTimeout))
+        if let first = configErrors.first {
+            let more = configErrors.count > 1 ? " (+\(configErrors.count - 1) more in the menu)" : ""
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+                MainActor.assumeIsolated { self?.toast.show("config.json: \(first)" + more, seconds: 3) }
+            }
+        }
 
         SystemSwitcher.installCrashGuard()
         hotkeys.install()
         hotkeys.handler = { [unowned self] action, time in
             guard permissions.isTrusted else { permissions.prompt(); return }
-            if action.isSwitcherAction { switcher.perform(action, eventTime: time) }
+            if action.isSwitcherAction {
+                if overview.isOpen { overview.close() }          // one overlay at a time
+                switcher.perform(action, eventTime: time)
+            }
             else if action.isWorkspaceAction { workspaces.perform(action, eventTime: time) }
             else if action == .toggleOverview { overview.toggle(eventTime: time) }
             else if action.isFocusAction { autoFocus.perform(action, eventTime: time) }
@@ -50,19 +65,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         autoFocus.onToggle = { [unowned self] cross, hover in
             config.crossScreenFocus = cross
             config.sameAppHover = hover
-            ConfigurationStore.save(config)
+            saveSetting(["crossScreenFocus": cross, "sameAppHover": hover])
         }
         displays.onChange = { [unowned self] in
             autoFocus.displaysChanged()
             workspaces.displaysChanged()
+            overview.displaysChanged()
             updateStatusTitle()
         }
-        autoFocus.parkedDisplay = { [unowned self] id in
-            guard let e = workspaces.state.parked(id) else { return nil }
-            return displays.displays.first { $0.uuid == e.scr }?.id
-        }
+        gestures.onNotice = { [unowned self] text in toast.show(text, seconds: 1.4) }
+        autoFocus.parkedDisplay = { [unowned self] id in workspaces.homeDisplayID(of: id) }
+        autoFocus.suspended = { [unowned self] in overview.isOpen || switcher.isOpen }
         workspaces.focus = { [unowned self] id, metric, start in
             guard let w = engine.windows[id], let app = engine.apps[w.pid] else { return }
+            // Monarch is focusing it (⌥ N, swipe, overview, Dock reveal): it's the most recent
+            // window now, even while it's still coming back from off screen.
+            autoFocus.noteFocusing(id)
             WindowFocuser.focus(id, of: app, perf: perf, metric: metric, since: start)
         }
         workspaces.onChange = { [unowned self] in updateStatusTitle(); overview.refreshIfOpen() }
@@ -91,7 +109,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The agent-managed copy takes over from this one when it starts (see main.swift).
         handoverToken = DistributedNotificationCenter.default().addObserver(
             forName: monarchHandoverNote, object: nil, queue: .main
-        ) { _ in MainActor.assumeIsolated { NSApp.terminate(nil) } }
+        ) { _ in
+            // Any app can post this notification. Quit only if a newer copy of Monarch really
+            // is starting (the agent's), so a stray post can't switch Monarch off.
+            let me = NSRunningApplication.current
+            let newer = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "dev.monarch.Monarch")
+                .contains { $0.processIdentifier != me.processIdentifier && !$0.isTerminated
+                    && ($0.launchDate ?? .distantPast) >= (me.launchDate ?? .distantFuture) }
+            guard newer else { return }
+            MainActor.assumeIsolated { self.restarting = true; NSApp.terminate(nil) }
+        }
         migrateLoginItem()
 
         setUpStatusItem()
@@ -104,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         hotkeys.unregisterAll()
         SystemSwitcher.setSystemEnabled(true)      // give ⌘Tab back to macOS
         announce(forceOff: true)
-        workspaces.flushSave()
+        workspaces.prepareForQuit(keepParked: restarting)
         engine.stop()
     }
 
@@ -126,11 +153,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: Configuration
 
     private func loadConfig() {
-        let (c, err) = ConfigurationStore.load()
-        config = c
-        configErrors = err.map { [$0] } ?? []
-        // First time: take over the gesture tuning Hammerspoon actually uses.
-        if config.gestures == nil {
+        let outcome = ConfigurationStore.read()
+        let (c, err) = ConfigFile.resolve(outcome)
+        // Checked like ⌃⌥⇧ R: problems are listed in the menu, and values out of range are
+        // replaced by their defaults rather than applied.
+        config = c.withDefaultsForOutOfRange()
+        let shortcutErrors = Set(c.resolvedBindings().errors)       // listed as binding errors already
+        configErrors = err.map { [$0] } ?? c.validate().filter { !shortcutErrors.contains($0) }
+        configWritable = ConfigFile.mayWrite(after: outcome)
+        // First time: take over the gesture tuning Hammerspoon actually uses. Never when the
+        // file couldn't be used: saving would replace the user's (broken) file with defaults.
+        if config.gestures == nil, ConfigFile.mayWrite(after: outcome) {
             let hs = "org.hammerspoon.Hammerspoon" as CFString
             CFPreferencesAppSynchronize(hs)
             let cfg = CFPreferencesCopyAppValue("gesture.cfg" as CFString, hs) as? [String: Any]
@@ -163,9 +196,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func syncAutoFocus() {
         let active = !hotkeys.registrations.isEmpty
         autoFocus.configure(cross: config.crossScreenFocus, hover: config.sameAppHover, active: active)
-        // macOS's own ⌘Tab is off only while Monarch's ⌘Tab is registered.
-        let ownsCmdTab = active && hotkeys.registrations[.switcherNext]?.ok == true
-        SystemSwitcher.setSystemEnabled(!ownsCmdTab)
+        // Each of macOS's own ⌘Tab, ⌘⇧Tab and ⌘` is off only while Monarch has that exact
+        // shortcut registered.
+        let registered = active ? hotkeys.registrations.values.filter(\.ok).map(\.shortcut) : []
+        SystemSwitcher.setOwned(SystemShortcuts.owned(by: registered))
         _ = switcher                                // build the hidden panel now, not on first ⌘Tab
         workspaces.setActive(active)
         if !active { overview.close() }
@@ -179,6 +213,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let queryNote = Notification.Name("dev.monarch.Monarch.query")
     private var queryToken: NSObjectProtocol?
     private var handoverToken: NSObjectProtocol?
+    /// Quitting to be started again (a newer copy taking over, or a rebuild's SIGHUP): parked
+    /// windows stay parked for the next copy, which loads the saved state.
+    var restarting = false
     private var agentRepairStopped = false
 
     /// Tells Hammerspoon whether Monarch currently owns the window shortcuts.
@@ -313,8 +350,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func toggleSnapping() {
         config.snappingEnabled.toggle()
-        ConfigurationStore.save(config)
+        saveSetting(["snappingEnabled": config.snappingEnabled])
         applyBindings()
+    }
+
+    /// Writes only these settings into config.json, leaving the rest of the file (including
+    /// edits not reloaded yet) as it is. A file that can't be read or parsed is never written.
+    private func saveSetting(_ changes: [String: Bool]) {
+        guard configWritable, ConfigurationStore.update(changes) else {
+            toast.show("Not saved: config.json can't be read (fix it and press ⌃⌥⇧ R)", seconds: 2.5)
+            return
+        }
     }
 
     @objc private func toggleCross() { autoFocus.perform(.toggleCrossScreenFocus, eventTime: PerformanceMonitor.now()) }
@@ -393,6 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         config = c
         configErrors = []
+        configWritable = true
         if config.gestures == nil { config.gestures = GestureConfig() }
         AXUIElementSetMessagingTimeout(AXUIElementCreateSystemWide(), Float(config.axTimeout))
         applyBindings()
@@ -425,6 +472,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             R(keys: "4 fingers", text: String(format: "%.3f of the trackpad", g.fourFinger)),
             R(keys: "Ratio", text: String(format: "%.2f (lock needs ≥ %.1f)", g.ratio, GestureRecognizer.minimumLockRatio)),
             R(keys: "Lock", text: String(format: "%.3f", g.lockDistance)),
+            R(keys: "Thumb", text: !g.thumbRejection ? "counted (thumbRejection off)"
+                : g.thumbArea == .anywhere ? "resting thumb ignored anywhere"
+                : "resting thumb ignored in \(g.thumbArea == .both ? "left and right" : g.thumbArea.rawValue) \(Int((g.thumbAreaWidth * 100).rounded()))%"),
             R(keys: "Overview", text: String(format: "full at %.2f travel", g.overviewTravel)),
             R(keys: "Click guard", text: String(format: "%.2f s", g.clickGuard)),
             R(keys: "Dock", text: gestures.dock.describe + (gestures.dock.isWatching ? "" : " (not watching)"))])]

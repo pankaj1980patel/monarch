@@ -126,15 +126,20 @@ extension OverviewModel {
 /// Window moves a workspace operation has started but not finished (they run on the apps'
 /// queues). Fast ⌥ N presses start a new switch while the previous one is still moving windows.
 ///
-/// - Counted, not a set: one window can be parked, restored and parked again by three quick
-///   switches. A set forgot it was still parking as soon as the first park finished, and the
-///   window's frame from the restore in between then looked like "moved back by hand", so it
-///   was dropped from its workspace.
-/// - Restores remember where the window is going: until the move is read back, the engine
-///   still has the parked frame, so a window being restored is neither parked nor visible.
+/// - Parks are counted, not a set: one window can be parked, restored and parked again by
+///   three quick switches. A set forgot it was still parking as soon as the first park
+///   finished, and the window's frame from the restore in between then looked like "moved
+///   back by hand", so it was dropped from its workspace.
+/// - Restores remember where the window is going until it's seen there. Until then, Monarch's
+///   copy of its frame is still the parked one, so it's neither parked nor visible. A fixed
+///   timer isn't enough: a busy app (Chrome) can take longer to move than any short delay.
+///   `restoreExpired` is only a safety net, for a window that never shows up.
 public struct MovesInFlight: Sendable {
+    /// How long after its move a restore that was never seen arriving is given up on.
+    public static let restoreSafetyNet = 3.0
+
     private var parks: [UInt32: Int] = [:]
-    private var restores: [UInt32: (count: Int, target: CGRect)] = [:]
+    private var restores: [UInt32: (seq: Int, target: CGRect)] = [:]
     public init() {}
 
     public mutating func parkStarted(_ id: UInt32) { parks[id, default: 0] += 1 }
@@ -144,16 +149,45 @@ public struct MovesInFlight: Sendable {
     }
     public func isParking(_ id: UInt32) -> Bool { parks[id] != nil }
 
-    public mutating func restoreStarted(_ id: UInt32, to target: CGRect) {
-        restores[id] = ((restores[id]?.count ?? 0) + 1, target)
-    }
-    public mutating func restoreFinished(_ id: UInt32) {
-        guard let r = restores[id] else { return }
-        restores[id] = r.count > 1 ? (r.count - 1, r.target) : nil
+    /// A restore toward `target`, started by operation `seq` (the newest one wins).
+    public mutating func restoreStarted(_ id: UInt32, to target: CGRect, seq: Int) { restores[id] = (seq, target) }
+    /// The window was seen on the target's display: no longer on its way.
+    public mutating func restoreArrived(_ id: UInt32) { restores.removeValue(forKey: id) }
+    /// The safety net for operation `seq`'s restore; ignored if a newer restore replaced it.
+    public mutating func restoreExpired(_ id: UInt32, seq: Int) {
+        if restores[id]?.seq == seq { restores.removeValue(forKey: id) }
     }
     /// Where a window being restored is going (nil when no restore is in flight).
     public func restoreTarget(_ id: UInt32) -> CGRect? { restores[id]?.target }
     public var restoring: [UInt32: CGRect] { restores.mapValues(\.target) }
+}
+
+/// Numbers workspace operations, so results and focus changes of an older operation can't
+/// undo a newer one. Fast ⌥ N presses overlap: the first switch can finish after the second.
+///
+/// - Per display: only the newest operation on a display may focus a window there. An older
+///   switch finishing late used to focus its own top window, which the newer switch had just
+///   parked: typing went into a window you couldn't see.
+/// - Per window: only the newest operation that moved a window may record what happened to
+///   it. A late "not moved" from an older park used to delete the newer switch's entry.
+public struct OperationSequence: Sendable {
+    private var last = 0
+    private var byDisplay: [String: Int] = [:]
+    private var byWindow: [UInt32: Int] = [:]
+    public init() {}
+
+    /// Starts an operation on `displays` that moves `windows`; returns its number.
+    public mutating func begin(displays: [String], windows: [UInt32]) -> Int {
+        last += 1
+        for d in displays { byDisplay[d] = last }
+        for w in windows { byWindow[w] = last }
+        return last
+    }
+    /// True if no newer operation has started on `display`.
+    public func isLatest(_ seq: Int, on display: String) -> Bool { (byDisplay[display] ?? seq) <= seq }
+    /// True if no newer operation has moved `window`.
+    public func isLatest(_ seq: Int, for window: UInt32) -> Bool { (byWindow[window] ?? seq) <= seq }
+    public mutating func forget(window: UInt32) { byWindow.removeValue(forKey: window) }
 }
 
 public enum WorkspaceSwitch {
@@ -174,4 +208,84 @@ public enum WorkspaceSwitch {
         }.keys.sorted()
         return incoming + visible
     }
+}
+
+extension Parking {
+    /// What a frame update means for a parked window.
+    public enum Update: Equatable, Sendable {
+        /// Still where it was parked.
+        case keep
+        /// Still off screen, somewhere else: record the new spot. macOS nudges parked windows
+        /// itself (the same window sits at y 759 or 768 depending on its size), and taking that
+        /// for "moved back by hand" dropped the window from its workspace while it stayed off
+        /// screen: ⌘Tab then showed it on the current workspace and couldn't bring it up.
+        case relearn(CGPoint)
+        /// Back on screen: the user (or the app) brought it back; it's no longer parked.
+        case unparked
+    }
+
+    public static func update(for frame: CGRect, entry e: ParkedWindow, offScreen: Bool) -> Update {
+        if offScreen {
+            if let px = e.px, let py = e.py, abs(frame.minX - px) < 6, abs(frame.minY - py) < 6 { return .keep }
+            return .relearn(frame.origin)
+        }
+        return .unparked
+    }
+}
+
+extension WorkspaceSwitch {
+    /// A window stuck off screen that no workspace knows about: not parked, not being parked
+    /// or restored, and (almost) entirely off every display. Picking it must bring it back
+    /// onto the current workspace instead of focusing it where nobody can see it.
+    public static func isStranded(parked: Bool, moving: Bool, minimized: Bool, frame: CGRect, displays: [Display]) -> Bool {
+        guard !parked, !moving, !minimized else { return false }
+        return !displays.contains { FocusLogic.visibleFraction(frame, on: $0.frame) >= FocusLogic.minVisibleFraction }
+    }
+}
+
+extension MovesInFlight {
+    /// A window closed: nothing of it is in flight any more.
+    public mutating func forget(_ id: UInt32) {
+        restoreArrived(id)
+        while isParking(id) { parkFinished(id) }
+    }
+}
+
+extension Parking {
+    /// True if `frame` sits where Monarch parks windows: at one of a display's parking spots
+    /// (x exact within a few points; y within the band macOS pulls parked windows up into,
+    /// e.g. 759 or 768 for a spot at 799). Used at launch to find windows a crash or a lost
+    /// entry left parked, without touching windows an app put off screen on purpose.
+    public static func looksParked(_ frame: CGRect, displays: [Display]) -> Bool {
+        displays.contains { d in
+            spots(for: frame.size, screen: d.frame).contains { p in
+                abs(frame.minX - p.x) <= 12 && abs(frame.minY - p.y) <= 60
+            }
+        }
+    }
+}
+
+/// Whether a display change means bringing every window back. The workspaces belong to the
+/// arrangement they were made on (`settled`). A monitor that blinks off and on (A → B → A)
+/// changes nothing: it used to bring every window back and reset every display to workspace 1.
+public struct DisplayArrangement: Sendable, Equatable {
+    public enum Step: Equatable, Sendable {
+        /// Back to the arrangement the workspaces belong to: drop any pending restore.
+        case cancelPending
+        /// Different: restore once it has settled (call `settle` then).
+        case scheduleRestore
+    }
+    public private(set) var settled: Set<String>
+    public init(_ settled: Set<String>) { self.settled = settled }
+
+    public func changed(to now: Set<String>) -> Step { now == settled ? .cancelPending : .scheduleRestore }
+
+    /// The arrangement has stayed `now` for a while. True if it really differs (restore).
+    public mutating func settle(_ now: Set<String>) -> Bool {
+        guard now != settled else { return false }
+        settled = now
+        return true
+    }
+    /// Not managing workspaces: the new arrangement is simply the current one.
+    public mutating func accept(_ now: Set<String>) { settled = now }
 }

@@ -66,7 +66,9 @@ final class TrackedApp: @unchecked Sendable {
         self.name = name
         self.element = AXUIElementCreateApplication(pid)
         self.report = report
-        self.queue = DispatchQueue(label: "monarch.app.\(pid)", qos: .userInteractive)
+        // userInitiated: everything here answers something the user did (a snap, a switch, a
+        // focus), but none of it draws frames; userInteractive is for the main thread's work.
+        self.queue = DispatchQueue(label: "monarch.app.\(pid)", qos: .userInitiated)
 
         var obs: AXObserver?
         let callback: AXObserverCallback = { _, element, notification, refcon in
@@ -76,7 +78,7 @@ final class TrackedApp: @unchecked Sendable {
         }
         if AXObserverCreate(pid, callback, &obs) == .success, let obs {
             observer = obs
-            CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
+            CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .commonModes)
         } else {
             observer = nil
         }
@@ -87,7 +89,7 @@ final class TrackedApp: @unchecked Sendable {
     func invalidate() {
         isLive.store(false, ordering: .sequentiallyConsistent)
         if let observer {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .defaultMode)
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(observer), .commonModes)
         }
     }
 

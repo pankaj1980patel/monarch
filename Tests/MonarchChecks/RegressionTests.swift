@@ -50,12 +50,13 @@ struct GestureRegressionTests {
         var r = GestureRecognizer(config: GestureConfig())          // lockDistance 0.012
         let o = feed(&r, [fingers(3, 0, 0), fingers(3, 0.011, 0)])
         expect(n(o, \.locked) == 0 && r.current == nil)
-        let o2 = feed(&r, [fingers(3, 0.013, 0)], start: 1)
+        // (Frames keep coming every few ms while fingers are down; a longer gap restarts.)
+        let o2 = feed(&r, [fingers(3, 0.013, 0)], start: 0.02)
         expect(n(o2, \.locked) == 1 && r.current?.axis == .horizontal)
         var cfg = GestureConfig(); cfg.lockDistance = 0.05
         var r2 = GestureRecognizer(config: cfg)
         expect(n(feed(&r2, [fingers(3, 0, 0), fingers(3, 0.04, 0)]), \.locked) == 0)
-        expect(n(feed(&r2, [fingers(3, 0.06, 0)], start: 1), \.locked) == 1)
+        expect(n(feed(&r2, [fingers(3, 0.06, 0)], start: 0.02), \.locked) == 1)
     }
 
     func testFirstFrameOnlyBaselinesAndBegins() {
@@ -149,7 +150,7 @@ struct GestureRegressionTests {
         var r2 = GestureRecognizer(config: GestureConfig())
         let o2 = feed(&r2, [fingers(3, 0, 0), fingers(3, 0.5, 0, ids: [1, 2, 9])])
         expect(n(o2, \.locked) == 0)
-        let o3 = feed(&r2, [fingers(3, 0.6, 0, ids: [1, 2, 9])], start: 1)
+        let o3 = feed(&r2, [fingers(3, 0.6, 0, ids: [1, 2, 9])], start: 0.02)
         expect(close(o3.compactMap(\.locked).first?.displacement ?? 0, 0.1, 0.005))
         // A finger joining after the lock does not change the locked finger count.
         var r3 = GestureRecognizer(config: GestureConfig())
@@ -231,11 +232,11 @@ struct GestureRegressionTests {
         expect(r.current == nil)
         _ = feed(&r, [fingers(3, 0, 0)])
         expect(r.current == nil)
-        _ = feed(&r, [fingers(3, 0, 0.05)], start: 1)
+        _ = feed(&r, [fingers(3, 0, 0.05)], start: 0.01)
         expect(r.current?.fingers == 3 && r.current?.direction == .up)
-        _ = feed(&r, [fingers(3, 0, 0.09)], start: 2)
+        _ = feed(&r, [fingers(3, 0, 0.09)], start: 0.02)
         expect(close(r.current?.displacement ?? 0, 0.09, 0.005))
-        _ = feed(&r, [[]], start: 3)
+        _ = feed(&r, [[]], start: 0.03)
         expect(r.current == nil)
     }
 

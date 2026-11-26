@@ -32,8 +32,24 @@ public struct WorkspaceState: Codable, Sendable, Equatable {
     public var active: [String: Int] = [:]
     /// Window ID (as a string, like Hammerspoon) -> parked window.
     public var hidden: [String: ParkedWindow] = [:]
+    /// The boot session the window ids belong to (kern.bootsessionuuid). Window ids start
+    /// again at every boot, so entries from an earlier boot could match unrelated new windows.
+    /// Nil in files from before (and Hammerspoon's).
+    public var boot: String?
 
     public init() {}
+
+    /// Makes the state this boot's. Entries saved during another boot are dropped (their ids
+    /// mean other windows now); returns true if any were. A state with no boot recorded is
+    /// kept: it can't be told apart, and the window-exists check still applies.
+    @discardableResult
+    public mutating func adopt(boot current: String) -> Bool {
+        defer { boot = current }
+        guard let b = boot, b != current, !hidden.isEmpty else { return false }
+        hidden.removeAll()
+        active.removeAll()
+        return true
+    }
 
     public func activeWorkspace(_ uuid: String) -> Int { active[uuid] ?? 1 }
     public func parked(_ id: UInt32) -> ParkedWindow? { hidden[String(id)] }

@@ -19,6 +19,32 @@ enum WindowList {
         return out
     }
 
+    /// On-screen normal windows with their current frames, front to back. Straight from the
+    /// window server, so it's never behind: Monarch's own copy of a frame is updated only when
+    /// the app's move notification has been read (and Chrome is slow to send those).
+    static func onScreen() -> [(id: UInt32, frame: CGRect)] {
+        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) else { return [] }
+        let n = CFArrayGetCount(list)
+        var out: [(id: UInt32, frame: CGRect)] = []
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            let d = dict(list, i)
+            guard int(d, kCGWindowLayer) == 0, let id = int(d, kCGWindowNumber), let b = value(d, kCGWindowBounds),
+                  CFGetTypeID(b) == CFDictionaryGetTypeID(),
+                  let r = CGRect(dictionaryRepresentation: unsafeDowncast(b, to: CFDictionary.self)) else { continue }
+            out.append((UInt32(truncatingIfNeeded: id), r))
+        }
+        return out
+    }
+
+    /// One window's current frame from the window server (nil if it doesn't exist). Safe
+    /// from any thread: used on app queues to check where a window really is.
+    static func frame(of id: UInt32) -> CGRect? {
+        guard let list = CGWindowListCopyWindowInfo(.optionIncludingWindow, CGWindowID(id)), CFArrayGetCount(list) > 0,
+              let b = value(dict(list, 0), kCGWindowBounds), CFGetTypeID(b) == CFDictionaryGetTypeID() else { return nil }
+        return CGRect(dictionaryRepresentation: unsafeDowncast(b, to: CFDictionary.self))
+    }
+
     /// The front-most normal window containing `p` (global, top-left coordinates).
     static func topWindow(at p: CGPoint) -> UInt32? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) else { return nil }

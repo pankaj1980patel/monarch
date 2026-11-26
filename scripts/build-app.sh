@@ -22,9 +22,19 @@ IDENTITY="Monarch Local Signing"
 
 cd "$ROOT"
 echo "→ swift build -c release"
-swift build -c release --product "$APP_NAME" 2>&1 | grep -vE '^\[[0-9]+/[0-9]+\]' || true
+# A failed build must stop here: otherwise the previous binary would be signed and installed
+# as if it were new.
+BUILD_LOG="$(mktemp -t monarch-build)"
+if ! swift build -c release --product "$APP_NAME" > "$BUILD_LOG" 2>&1; then
+  grep -vE '^\[[0-9]+/[0-9]+\]' "$BUILD_LOG" | tail -40
+  echo "build failed: nothing installed"
+  rm -f "$BUILD_LOG"
+  exit 1
+fi
+grep -E 'warning:|error:' "$BUILD_LOG" | sort -u | head -20 || true
+rm -f "$BUILD_LOG"
 BIN="$(swift build -c release --show-bin-path)/$APP_NAME"
-[[ -x "$BIN" ]] || { echo "build failed"; exit 1; }
+[[ -x "$BIN" ]] || { echo "build failed: no binary"; exit 1; }
 
 # --- signing identity (one time) -------------------------------------------------
 ensure_identity() {
@@ -133,7 +143,7 @@ if [[ -x "$DEST/Contents/MacOS/$APP_NAME" ]] && "$DEST/Contents/MacOS/$APP_NAME"
   AGENT_ON=1
 fi
 if [[ "${1:-}" == "--run" || $AGENT_ON == 1 ]]; then
-  pkill -x "$APP_NAME" 2>/dev/null && sleep 0.5 || true    # SIGTERM: clean quit, launchd doesn't restart it
+  pkill -HUP -x "$APP_NAME" 2>/dev/null && sleep 0.5 || true    # SIGHUP: clean quit for a restart (keeps parked windows parked); launchd doesn't restart it
 fi
 mkdir -p "$HOME/Applications"
 # Update in place (same folder): the login agent's background-item record points at this

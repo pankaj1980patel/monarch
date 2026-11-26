@@ -36,6 +36,14 @@ The build script signs with a local self-signed identity so the Accessibility gr
 
 Press ⌃⌥ / for the full sheet. Settings live in `~/Library/Application Support/Monarch/config.json` and are applied with ⌃⌥⇧ R (or Reload Configuration in the menu) after a check: a file with mistakes is not applied, and the menu lists them.
 
+A thumb resting on the trackpad is ignored during three- and four-finger swipes. Choose where it rests in the `gestures` section:
+
+```json
+"gestures": { "thumbArea": "left", "thumbAreaWidth": 0.33 }
+```
+
+`thumbArea` is `left` (right-handed, the default), `right` (left-handed), `both` or `anywhere`. `thumbAreaWidth` is the width of the area at each side, from 0.1 to 0.5 of the trackpad. Set `"thumbRejection": false` to count every contact as a finger.
+
 ## Design
 
 See [docs/blueprint.html](docs/blueprint.html) for the architecture, performance rules and roadmap.

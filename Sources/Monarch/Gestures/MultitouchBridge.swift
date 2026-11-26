@@ -21,7 +21,9 @@ import Synchronization
 /// interactive overview is published in one atomic word that the display link reads.
 final class MultitouchBridge: @unchecked Sendable {
     private typealias CreateList = @convention(c) () -> Unmanaged<CFArray>?
-    private typealias Callback = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, Int, Double, Int) -> Int32
+    // The C callback takes `int` finger count and frame number (32-bit). Declaring them as Int
+    // would read the full 64-bit registers, whose upper half the caller never sets.
+    private typealias Callback = @convention(c) (UnsafeMutableRawPointer?, UnsafeMutableRawPointer?, Int32, Double, Int32) -> Int32
     private typealias Register = @convention(c) (UnsafeMutableRawPointer?, Callback) -> Void
     private typealias Start = @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void
     private typealias Stop = @convention(c) (UnsafeMutableRawPointer?) -> Void
@@ -64,13 +66,25 @@ final class MultitouchBridge: @unchecked Sendable {
     let progress = Atomic<UInt64>(0)
 
     // Callback-thread state (only touched by the callback, or while no device is running).
-    private struct Device { let ref: UnsafeMutableRawPointer; var recognizer: GestureRecognizer }
+    // Each trackpad has its own buffer, recognizer and settings generation: two trackpads'
+    // frames never share mutable state.
+    private struct Device {
+        let ref: UnsafeMutableRawPointer
+        var recognizer: GestureRecognizer
+        var buffer = [TouchPoint](repeating: TouchPoint(id: 0, x: 0, y: 0), count: 10)
+        var configGeneration = 0
+    }
     private var devices: [Device] = []
-    private var buffer = [TouchPoint](repeating: TouchPoint(id: 0, x: 0, y: 0), count: 10)
+    /// Which device's gesture `progress` belongs to (index + 1; 0 = none), so a second
+    /// trackpad can't overwrite or clear the live gesture of the first.
+    private let progressOwner = Atomic<Int>(0)
     private var framesSeen = 0, framesInvalid = 0
     private var incompatible = false
 
-    private let pendingConfig = Mutex<GestureConfig?>(nil)
+    /// The newest settings and their generation. Every device applies them itself (they used
+    /// to be taken by whichever trackpad sent the next frame, so the other kept old settings).
+    private let pendingConfig = Mutex<(config: GestureConfig, generation: Int)?>(nil)
+    private var configGeneration = 0
     private var config: GestureConfig
     private var deviceList: CFArray?
     private(set) var isRunning = false
@@ -85,7 +99,9 @@ final class MultitouchBridge: @unchecked Sendable {
     /// New settings; the callback picks them up on its next frame without ever waiting.
     func update(config: GestureConfig) {
         self.config = config
-        pendingConfig.withLock { $0 = config }
+        configGeneration += 1
+        let g = configGeneration
+        pendingConfig.withLock { $0 = (config, g) }
     }
 
     /// Restarts when a multitouch device appears or disappears (Magic Trackpad on/off).
@@ -107,7 +123,7 @@ final class MultitouchBridge: @unchecked Sendable {
             }
             var r = GestureRecognizer(config: config)
             if w > 0 && h > 0 { r.aspect = (Double(w), Double(h)) }
-            found.append(Device(ref: ref, recognizer: r))
+            found.append(Device(ref: ref, recognizer: r, configGeneration: configGeneration))
         }
         guard !found.isEmpty else { deviceList = nil; return }
         devices = found
@@ -134,6 +150,7 @@ final class MultitouchBridge: @unchecked Sendable {
         devices.removeAll()
         deviceList = nil
         progress.store(0, ordering: .relaxed)
+        progressOwner.store(0, ordering: .relaxed)
         return out
     }
 
@@ -145,14 +162,16 @@ final class MultitouchBridge: @unchecked Sendable {
         MultitouchBridge.inFlight.add(1, ordering: .sequentiallyConsistent)
         defer { MultitouchBridge.inFlight.subtract(1, ordering: .sequentiallyConsistent) }
         guard MultitouchBridge.active.load(ordering: .sequentiallyConsistent) else { return 0 }
-        MultitouchBridge.current?.frame(device, data, count, time, frame)
+        // Clamped: a nonsense count must never make us read past the frame's touch data.
+        MultitouchBridge.current?.frame(device, data, Int(max(0, min(count, 32))), time, Int(frame))
         return 0     // the return value is ignored as far as we can tell; macOS gestures run regardless
     }
 
     private func frame(_ device: UnsafeMutableRawPointer?, _ data: UnsafeMutableRawPointer?, _ count: Int, _ time: Double, _ frame: Int) {
         guard !incompatible, let di = devices.firstIndex(where: { $0.ref == device }) else { return }
-        if let c = pendingConfig.withLockIfAvailable({ v -> GestureConfig? in defer { v = nil }; return v }) ?? nil {
-            devices[di].recognizer.config = c
+        if let p = pendingConfig.withLockIfAvailable({ $0 }) ?? nil, p.generation != devices[di].configGeneration {
+            devices[di].recognizer.config = p.config
+            devices[di].configGeneration = p.generation
         }
 
         var n = 0
@@ -170,7 +189,7 @@ final class MultitouchBridge: @unchecked Sendable {
                       (0...7).contains(state), (0...255).contains(id),
                       x > -0.05, x < 1.05, y > -0.05, y < 1.05 else { valid = false; break }
                 if state == 3 || state == 4 {                   // make-touch / touching: on the glass
-                    buffer[n] = TouchPoint(id: id, x: x, y: y)
+                    devices[di].buffer[n] = TouchPoint(id: id, x: x, y: y)
                     n += 1
                 }
             }
@@ -187,14 +206,22 @@ final class MultitouchBridge: @unchecked Sendable {
             guard valid else { return }                         // never act on a bad frame
         }
 
-        let out = buffer.withUnsafeBufferPointer {
+        let buf = devices[di].buffer
+        let out = buf.withUnsafeBufferPointer {
             devices[di].recognizer.process(UnsafeBufferPointer(rebasing: $0[0..<n]), time: time)
         }
+        let me = di + 1
         if let s = devices[di].recognizer.current {
-            let bits = UInt64(Float(s.displacement).bitPattern)
-            progress.store((1 << 63) | (UInt64(s.fingers) << 40) | (UInt64(s.axis.rawValue) << 32) | bits, ordering: .relaxed)
+            // Take the live progress only if no other trackpad has a gesture going.
+            let owner = progressOwner.compareExchange(expected: 0, desired: me, ordering: .relaxed).original
+            if owner == 0 || owner == me {
+                let bits = UInt64(Float(s.displacement).bitPattern)
+                progress.store((1 << 63) | (UInt64(s.fingers) << 40) | (UInt64(s.axis.rawValue) << 32) | bits, ordering: .relaxed)
+            }
         } else if out.ended != nil || out.lifted {
-            progress.store(0, ordering: .relaxed)
+            if progressOwner.compareExchange(expected: me, desired: 0, ordering: .relaxed).exchanged {
+                progress.store(0, ordering: .relaxed)
+            }
         }
         if !out.isEmpty { onOutput?(out) }
     }
@@ -216,7 +243,7 @@ private final class HotplugWatcher: @unchecked Sendable {
         self.onChange = onChange
         guard let port = IONotificationPortCreate(kIOMainPortDefault) else { return }
         self.port = port
-        CFRunLoopAddSource(CFRunLoopGetMain(), IONotificationPortGetRunLoopSource(port).takeUnretainedValue(), .defaultMode)
+        CFRunLoopAddSource(CFRunLoopGetMain(), IONotificationPortGetRunLoopSource(port).takeUnretainedValue(), .commonModes)
         let me = Unmanaged.passUnretained(self).toOpaque()
         let cb: IOServiceMatchingCallback = { refcon, iterator in
             HotplugWatcher.drain(iterator)

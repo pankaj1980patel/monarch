@@ -22,6 +22,10 @@ final class DockState {
     /// When the state last changed (PerformanceMonitor clock).
     private(set) var changedAt: Double = 0
     var onChange: ((State) -> Void)?
+    /// App Exposé was asked for and the Dock didn't act on it (for a short on-screen notice).
+    var onNoReaction: (() -> Void)?
+    /// Bumped by every toggle, so a check left over from an older one does nothing.
+    private var verifyGeneration = 0
 
     private var observer: AXObserver?
     private var dockApp: AXUIElement?
@@ -75,14 +79,14 @@ final class DockState {
         var any = false
         for n in Self.notes where AXObserverAddNotification(obs, app, n as CFString, me) == .success { any = true }
         guard any else { set(.unknown); return }
-        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
+        CFRunLoopAddSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .commonModes)
         observer = obs; dockApp = app; dockPID = pid
         set(scan())
     }
 
     private func detach() {
         if let obs = observer {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .defaultMode)
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), AXObserverGetRunLoopSource(obs), .commonModes)
         }
         observer = nil; dockApp = nil; dockPID = 0
     }
@@ -108,6 +112,7 @@ final class DockState {
         guard AXUIElementCopyAttributeValue(app, kAXChildrenAttribute as CFString, &v) == .success,
               let kids = v as? [AXUIElement] else { return .unknown }
         for k in kids {
+            AXUIElementSetMessagingTimeout(k, 0.25)      // each child is its own element: bound it too
             var id: CFTypeRef?
             guard AXUIElementCopyAttributeValue(k, "AXIdentifier" as CFString, &id) == .success, let s = id as? String else { continue }
             if s == "appexpose" { return .confirmed(.appExpose) }
@@ -167,14 +172,18 @@ final class DockState {
     /// after login especially), and a fallback sent while it's opening would close it again.
     private func verifyLater(_ expect: Mode, log: @escaping (String) -> Void, fallback: Bool) {
         pendingVerify?.cancel()
+        verifyGeneration += 1
+        let gen = verifyGeneration
         let work = DispatchWorkItem { [weak self] in
-            guard let self else { return }
+            guard let self, self.verifyGeneration == gen else { return }
             self.resync()
             guard self.state != .confirmed(expect) else { return }
             if fallback, Self.postShortcut() {
                 log("Dock didn't react: used the App Exposé shortcut")
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                    guard let self else { return }
+                    // A newer open / close since then: its own check decides, not this one
+                    // (opening and closing within 0.5 s looked like "the shortcut works").
+                    guard let self, self.verifyGeneration == gen else { return }
                     self.resync()
                     if self.state == .confirmed(expect) {
                         self.trigger.fallbackWorked()
@@ -184,6 +193,7 @@ final class DockState {
             } else {
                 if self.trigger.route == .shortcut { self.trigger.shortcutFailed() }   // try the Dock again next time
                 log("Dock didn't react (state \(self.describe))")
+                self.onNoReaction?()
             }
         }
         pendingVerify = work

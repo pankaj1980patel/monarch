@@ -28,10 +28,12 @@ final class WorkspaceHUD {
 
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        highlight.frame = cellRect(from ?? act)
+        // Reduce Motion: straight on the new workspace, no glide from the old one.
+        highlight.frame = cellRect(Motion.reduced ? act : (from ?? act))
         CATransaction.commit()
         panel.showOpaque()
-        if let from, from != act {
+        Motion.announce(target.map { "Sent to workspace \($0)" } ?? "Workspace \(act)")
+        if let from, from != act, !Motion.reduced {
             CATransaction.begin()
             CATransaction.setAnimationDuration(0.24)
             CATransaction.setAnimationTimingFunction(CAMediaTimingFunction(controlPoints: 0.16, 1, 0.3, 1))  // ease-out
@@ -50,6 +52,7 @@ final class WorkspaceHUD {
         highlight.isHidden = true
         place(panel, width: 9 * Self.cell + 2 * Self.pad, on: display)
         panel.showOpaque()
+        Motion.announce(text)
         scheduleHide(after: 0.9)
     }
 
@@ -68,7 +71,7 @@ final class WorkspaceHUD {
         hideWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.25
+                ctx.duration = Motion.fade(0.25)
                 self?.panel?.animator().alphaValue = 0
             }, completionHandler: {
                 MainActor.assumeIsolated { if self?.panel?.alphaValue == 0 { self?.panel?.orderOut(nil) } }

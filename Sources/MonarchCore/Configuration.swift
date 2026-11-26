@@ -73,7 +73,86 @@ public struct AppConfiguration: Codable, Sendable, Equatable {
             check("clickGuard", g.clickGuard, 0...2)
             check("lockDistance", g.lockDistance, 0.001...0.2)
             check("overviewTravel", g.overviewTravel, 0.02...1)
+            check("thumbAreaWidth", g.thumbAreaWidth, 0.1...0.5)
         }
         return problems.sorted()
+    }
+
+    /// This configuration with every value `validate` finds out of range put back to its
+    /// default. At launch there are no previous settings to keep (as ⌃⌥⇧ R does), and an
+    /// out-of-range value must not be applied silently.
+    public func withDefaultsForOutOfRange() -> AppConfiguration {
+        var c = self
+        if !(0.05...5).contains(c.axTimeout) { c.axTimeout = AppConfiguration().axTimeout }
+        if var g = c.gestures {
+            let d = GestureConfig()
+            if !(0.005...0.5).contains(g.threeFinger) { g.threeFinger = d.threeFinger }
+            if !(0.005...0.5).contains(g.fourFinger) { g.fourFinger = d.fourFinger }
+            if !(1...5).contains(g.ratio) { g.ratio = d.ratio }
+            if !(0...2).contains(g.clickGuard) { g.clickGuard = d.clickGuard }
+            if !(0.001...0.2).contains(g.lockDistance) { g.lockDistance = d.lockDistance }
+            if !(0.02...1).contains(g.overviewTravel) { g.overviewTravel = d.overviewTravel }
+            if !(0.1...0.5).contains(g.thumbAreaWidth) { g.thumbAreaWidth = d.thumbAreaWidth }
+            c.gestures = g
+        }
+        return c
+    }
+}
+
+/// What reading config.json found, and what may be done about it. A file that exists but
+/// can't be read or parsed must never be replaced with defaults: it's the user's hand edit
+/// (one trailing comma used to cost them the whole file at the next launch).
+public enum ConfigFile {
+    public enum Outcome {
+        /// No file: first run. Defaults are used and written.
+        case missing
+        case loaded(AppConfiguration)
+        /// The file exists but couldn't be read (permissions, I/O): defaults in memory only.
+        case unreadable(String)
+        /// The file was read but isn't valid JSON for a config: defaults in memory only.
+        case invalid(String)
+    }
+
+    public static func interpret(exists: Bool, data: Data?) -> Outcome {
+        guard exists else { return .missing }
+        guard let data else { return .unreadable("config.json couldn't be read") }
+        do { return .loaded(try JSONDecoder().decode(AppConfiguration.self, from: data)) }
+        catch { return .invalid("config.json has an error, not applied (fix it and press ⌃⌥⇧ R): \(error.localizedDescription)") }
+    }
+
+    /// The configuration to run with and the error to show, if any.
+    public static func resolve(_ o: Outcome) -> (AppConfiguration, error: String?) {
+        switch o {
+        case .missing: return (AppConfiguration(), nil)
+        case let .loaded(c): return (c, nil)
+        case let .unreadable(e), let .invalid(e): return (AppConfiguration(), e)
+        }
+    }
+
+    /// Whether Monarch may write the file now: on a first run (no file) or to fill in
+    /// first-run settings of a file it read successfully. Never over a file it couldn't use.
+    public static func mayWrite(after o: Outcome) -> Bool {
+        switch o {
+        case .missing, .loaded: return true
+        case .unreadable, .invalid: return false
+        }
+    }
+
+    /// config.json with only `changes` (top-level keys) set, everything else as it is on disk:
+    /// for the menu and ⌃⌥ M / ⌃⌥ H toggles. Writing Monarch's whole copy instead replaced edits
+    /// not yet reloaded, and a file Monarch couldn't read. Nil when the file isn't a JSON object
+    /// (unreadable or broken): then nothing may be written. No file: a full default config.
+    public static func patch(_ data: Data?, exists: Bool, changes: [String: Bool]) -> Data? {
+        var object: [String: Any]
+        if !exists {
+            guard let d = try? JSONEncoder().encode(AppConfiguration()),
+                  let o = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return nil }
+            object = o
+        } else {
+            guard let data, let o = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return nil }
+            object = o
+        }
+        for (k, v) in changes { object[k] = v }
+        return try? JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
     }
 }

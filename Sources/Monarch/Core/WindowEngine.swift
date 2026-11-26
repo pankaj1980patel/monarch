@@ -38,12 +38,22 @@ final class WindowEngine {
     func onFocus(_ f: @escaping (CGWindowID) -> Void) { focusListeners.append(f) }
     func onRemove(_ f: @escaping (CGWindowID) -> Void) { removeListeners.append(f) }
     func onUpdate(_ f: @escaping (ManagedWindow) -> Void) { updateListeners.append(f) }
+    /// Only frame / minimized changes (and new windows), not title-only ones: for work nobody
+    /// sees until later (a closed overview's cards), which a ticking terminal title would
+    /// otherwise trigger every second.
+    private var layoutListeners: [(ManagedWindow) -> Void] = []
+    func onLayoutChange(_ f: @escaping (ManagedWindow) -> Void) { layoutListeners.append(f) }
     private var tokens: [NSObjectProtocol] = []
     private let ownPID = ProcessInfo.processInfo.processIdentifier
+
+    /// Bumped by every start / stop: events queued by apps from an earlier run (before an
+    /// Accessibility revoke, say) carry the old value and are dropped.
+    private var epoch = 0
 
     func start() {
         guard !isRunning else { return }
         isRunning = true
+        resetState()
         let nc = NSWorkspace.shared.notificationCenter
         tokens.append(nc.addObserver(forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main) { note in
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
@@ -103,8 +113,12 @@ final class WindowEngine {
     @discardableResult
     private func track(pid: pid_t, name: String, startNow: Bool = true) -> TrackedApp {
         if let a = apps[pid] { return a }
+        let runEpoch = epoch
         let app = TrackedApp(pid: pid, name: name) { event in
-            DispatchQueue.main.async { MainActor.assumeIsolated { self.apply(event) } }
+            DispatchQueue.main.async { MainActor.assumeIsolated {
+                guard self.epoch == runEpoch else { return }      // from a previous run
+                self.apply(event)
+            } }
         }
         apps[pid] = app
         if startNow, pid != ownPID, isRunning { app.start() }
@@ -154,9 +168,12 @@ final class WindowEngine {
             guard apps[pid] != nil else { return }        // app quit meanwhile
             for w in list { windows[w.id] = w }
         case let .upsert(w):
-            guard apps[w.pid] != nil, windows[w.id] != w else { return }   // unchanged: nothing to tell
+            guard apps[w.pid] != nil else { return }
+            let old = windows[w.id]
+            guard old != w else { return }                                   // unchanged: nothing to tell
             windows[w.id] = w
             updateListeners.forEach { $0(w) }
+            if old?.frame != w.frame || old?.isMinimized != w.isMinimized { layoutListeners.forEach { $0(w) } }
         case let .removed(pid, id):
             windows.removeValue(forKey: id)
             // A closed window is no longer its app's focused window (it may have been the last one).
@@ -175,8 +192,32 @@ final class WindowEngine {
         for t in tokens { NSWorkspace.shared.notificationCenter.removeObserver(t) }
         tokens.removeAll()
         for app in apps.values { app.invalidate() }
+        isRunning = false
+        resetState()
+    }
+
+    /// Drops windows the window server no longer has (a "closed" notification that never
+    /// came, e.g. the subscription failed), so ⌘Tab and the overview don't list ghosts.
+    func pruneDeadWindows() {
+        let alive = WindowList.existingIDs()
+        guard !alive.isEmpty else { return }
+        let dead = windows.keys.filter { !alive.contains($0) }
+        for id in dead {
+            if let pid = windows[id]?.pid { focusedWindow.windowClosed(id, of: pid) }
+            windows.removeValue(forKey: id)
+            removeListeners.forEach { $0(id) }
+        }
+    }
+
+    /// Everything learned from a run: a fresh start relearns it all from the apps.
+    private func resetState() {
+        epoch &+= 1
         apps.removeAll()
         windows.removeAll()
-        isRunning = false
+        focusedWindow.removeAll()
+        pendingFocus = nil
+        hiddenPIDs.removeAll()
+        frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier ?? 0
+        iconBacklog.removeAll()
     }
 }

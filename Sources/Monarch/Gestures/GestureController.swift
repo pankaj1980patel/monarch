@@ -1,6 +1,7 @@
 import AppKit
 import MonarchCore
 import QuartzCore
+import Synchronization
 
 /// What swipes do (each gesture does at most one thing):
 /// - four fingers ← / →: next / previous workspace on the screen under the mouse
@@ -36,6 +37,16 @@ final class GestureController {
     private var ticker: FrameTicker?
 
     private(set) var log: [String] = []
+    /// Bumped on every stop / reset: gesture events the touch thread queued before it are
+    /// dropped instead of acting on the state after it.
+    private let epoch = Epoch()
+    private final class Epoch: Sendable {
+        private let value = Atomic<Int>(0)
+        func load() -> Int { value.load(ordering: .acquiring) }
+        func bump() { value.add(1, ordering: .releasing) }
+    }
+    /// A short on-screen notice when a swipe did nothing for a reason the user can't see.
+    var onNotice: ((String) -> Void)?
     private(set) var incompatible = false
     private(set) var conflicts: [String] = []
     private var tokens: [NSObjectProtocol] = []
@@ -47,9 +58,14 @@ final class GestureController {
         self.overview = overview
         self.perf = perf
         bridge = MultitouchBridge(config: config)
+        let epoch = self.epoch
         bridge.onOutput = { [unowned self] out in
             let t = PerformanceMonitor.now()
-            DispatchQueue.main.async { MainActor.assumeIsolated { self.handle(out, at: t) } }
+            let e = epoch.load()
+            DispatchQueue.main.async { MainActor.assumeIsolated {
+                guard epoch.load() == e else { return }   // queued before a stop / reset
+                self.handle(out, at: t)
+            } }
         }
         bridge.onIncompatible = { [unowned self] in
             DispatchQueue.main.async { MainActor.assumeIsolated {
@@ -58,6 +74,7 @@ final class GestureController {
                 self.handle(self.bridge.stop(), at: PerformanceMonitor.now())
             } }
         }
+        dock.onNoReaction = { [unowned self] in onNotice?("App Exposé didn't respond, try again") }
         dock.onChange = { [unowned self] s in
             // macOS opened App Exposé / Mission Control itself: it owns this gesture now.
             if s != .confirmed(.none), case .overview = interactive {
@@ -90,7 +107,7 @@ final class GestureController {
         bridge.update(config: c)
         wantRunning = active && c.enabled && !incompatible
         conflicts = Dock.conflicts()
-        if wantRunning { bridge.start() } else { handle(bridge.stop(), at: PerformanceMonitor.now()) }
+        if wantRunning { bridge.start() } else { epoch.bump(); handle(bridge.stop(), at: PerformanceMonitor.now()) }
     }
 
     /// Re-read native gesture settings (the menu opens; the user may have changed them).
@@ -99,6 +116,7 @@ final class GestureController {
     // MARK: Lifecycle
 
     private func reset(stop: Bool, reason: String) {
+        epoch.bump()
         let out = bridge.isRunning ? (stop ? bridge.stop() : bridge.restart()) : GestureOutput()
         if !stop && !bridge.isRunning && wantRunning { bridge.start() }
         cancelInteraction()
@@ -145,6 +163,8 @@ final class GestureController {
         } else if dock.isBusy {
             interactive = .ignored
             note("3-finger \(up ? "↑" : "↓") ignored: Dock state \(dock.describe)")
+            // Say why nothing happened. Mission Control showing explains itself; an unknown state doesn't.
+            if dock.state == .unknown { onNotice?("Dock busy, try again") }
         } else if overview.isOpen {
             // ↓ closes it; ↑ again (the gesture that opened it) closes it too.
             interactive = .overview(opening: overview.beginInteractive(), sign: up ? -1 : 1)

@@ -16,6 +16,28 @@ public struct GestureConfig: Codable, Sendable, Equatable {
     public var lockDistance = 0.012
     /// Three-finger travel (fraction of the trackpad) that fully opens / closes the overview.
     public var overviewTravel = 0.18
+    /// Leave out resting contacts (a thumb in `thumbArea`): the gesture's fingers are the ones
+    /// that move together. Without it a resting thumb turns a two-finger scroll into a
+    /// three-finger swipe, and a three-finger swipe into a four-finger one.
+    public var thumbRejection = true
+    /// Where on the trackpad a resting thumb is looked for: `left` (right-handed: the thumb
+    /// rests left of the fingers), `right` (left-handed), `both` (a strip at each side, for
+    /// either hand) or `anywhere`. A contact outside it always counts as a finger.
+    public enum ThumbArea: String, Codable, Sendable, CaseIterable { case left, right, both, anywhere }
+    public var thumbArea: ThumbArea = .left
+    /// Width of the thumb area at a side, as a fraction of the trackpad's width (0.1…0.5).
+    public var thumbAreaWidth = 1.0 / 3
+
+    /// True if a contact that landed at `x` (0 = left edge, 1 = right edge) may be a thumb.
+    public func inThumbArea(_ x: Float) -> Bool {
+        let w = Float(thumbAreaWidth)
+        switch thumbArea {
+        case .left: return x < w
+        case .right: return x > 1 - w
+        case .both: return x < w || x > 1 - w
+        case .anywhere: return true
+        }
+    }
 
     public init() {}
 
@@ -30,6 +52,9 @@ public struct GestureConfig: Codable, Sendable, Equatable {
         clickGuard = try c.decodeIfPresent(Double.self, forKey: .clickGuard) ?? d.clickGuard
         lockDistance = try c.decodeIfPresent(Double.self, forKey: .lockDistance) ?? d.lockDistance
         overviewTravel = try c.decodeIfPresent(Double.self, forKey: .overviewTravel) ?? d.overviewTravel
+        thumbRejection = try c.decodeIfPresent(Bool.self, forKey: .thumbRejection) ?? d.thumbRejection
+        thumbArea = try c.decodeIfPresent(ThumbArea.self, forKey: .thumbArea) ?? d.thumbArea
+        thumbAreaWidth = try c.decodeIfPresent(Double.self, forKey: .thumbAreaWidth) ?? d.thumbAreaWidth
     }
 
     /// The settings Hammerspoon uses from its saved "gesture.cfg" (numbers only, like Hammerspoon).
@@ -99,6 +124,15 @@ public struct GestureOutput: Sendable, Equatable {
 ///   finger count and axis are fixed until every finger lifts. Later finger changes, wobble on
 ///   the other axis and direction reversals can't turn it into a different gesture.
 /// - Five or more fingers cancel the gesture (a palm, not a swipe).
+/// - Resting contacts (thumb rejection), by motion consensus: the gesture's fingers are the
+///   largest group of contacts that move together (same direction, similar distance). Only a
+///   contact that landed in the thumb area (`GestureConfig.thumbArea`) can be left out, if it
+///   rests or moves differently; any other contact counts as a finger, as without thumb
+///   rejection. The group is frozen at the lock.
+///   So thumb + two fingers is a scroll (no group of three: no gesture), thumb + three fingers
+///   a three-finger swipe, thumb + four fingers a four-finger swipe, and five fingers moving
+///   together a palm (cancelled). A thumb that swipes along with the others is in the group.
+/// - The gesture ends when its own fingers lift, even if a resting thumb stays down.
 /// - Events: `began`, `locked`, `crossed` (threshold reached), `ended` (lift), `lifted` —
 ///   each at most once per gesture.
 ///
@@ -115,6 +149,29 @@ public struct GestureRecognizer: Sendable {
     private var sx = [Float](repeating: 0, count: 10)
     private var sy = [Float](repeating: 0, count: 10)
     private var count = 0
+    // Current positions of the measured contacts, and scratch space for the consensus (fixed
+    // storage: nothing is allocated per frame).
+    private var cx = [Float](repeating: 0, count: 10)
+    private var cy = [Float](repeating: 0, count: 10)
+    private var mvx = [Double](repeating: 0, count: 10)
+    private var mvy = [Double](repeating: 0, count: 10)
+    private var mlen = [Double](repeating: 0, count: 10)
+    private var compat = [UInt16](repeating: 0, count: 10)
+    private var lastTime = -Double.infinity
+    /// Which measured contacts are down this frame (bit j = ids[j]). A contact that lifts
+    /// before the lock keeps its landing point, in case the same finger comes back.
+    private var present: UInt16 = 0
+    // Recent positions: 4 frames per contact (slot = j * 4 + frame % 4), for "how is it moving
+    // now" next to "how far has it moved since landing".
+    private var hx = [Float](repeating: 0, count: 40)
+    private var hy = [Float](repeating: 0, count: 40)
+    private var hslot = 0
+    private var rvx = [Double](repeating: 0, count: 10)
+    private var rvy = [Double](repeating: 0, count: 10)
+    private var rlen = [Double](repeating: 0, count: 10)
+    /// When a moving group first appeared in this measurement (observation window start).
+    private var groupSince: Double?
+    private var now = 0.0
     private var lockedSample: SwipeSample?
     private var crossed = false
     // Velocity ring: (time, displacement) along the locked axis.
@@ -134,14 +191,43 @@ public struct GestureRecognizer: Sendable {
     public mutating func reset() -> GestureOutput {
         var out = GestureOutput()
         out.lifted = began
-        phase = .idle; began = false; count = 0; lockedSample = nil; crossed = false; vn = 0; vi = 0
+        phase = .idle; began = false; count = 0; present = 0; groupSince = nil; lockedSample = nil; crossed = false; vn = 0; vi = 0
         return out
     }
 
     /// Feeds one frame of fingers on the glass, with the frame's timestamp (seconds).
+    // Motion consensus (see the type's notes). Starting values from the design discussion;
+    // distances are in fractions of the trackpad's longer side.
+    /// Two contacts move together when both have moved at least this × `lockDistance`, the
+    /// smaller movement is at least `consensusMinRatio` of the larger, and their directions
+    /// agree to `consensusMinCosine`.
+    public static let consensusMinMove = 0.5
+    public static let consensusMinRatio = 0.45
+    public static let consensusMinCosine = 0.85
+    /// A contact outside the moving group is resting below this share of the group's movement.
+    public static let restingShare = 0.35
+    /// …and moving like a finger of the group from this share on (same direction).
+    public static let participatingShare = 0.6
+    /// Leaving a contact out waits until the group has moved this × `lockDistance`: a clearly
+    /// still contact (below `stillShare`) after `decideStill`, anything less clear after
+    /// `decideBy`. A finger of a real four-finger swipe that starts moving a few ms late looks
+    /// still at first; the wait lets it catch up and join, instead of turning the swipe into a
+    /// three-finger one. With no extra contact there's no wait.
+    public static let stillShare = 0.15
+    public static let decideStill = 1.5
+    public static let decideBy = 2.5
+    /// …and at least this long after the group started moving (seconds): long enough for a
+    /// late finger's recent movement to match the others', while a resting thumb's stays ~0.
+    public static let observeFor = 0.032
+    /// Frames further apart than this (dropped frames) restart the measurement.
+    public static let maxGap = 0.1
+
     public mutating func process(_ touches: UnsafeBufferPointer<TouchPoint>, time: Double) -> GestureOutput {
         var out = GestureOutput()
         let n = min(touches.count, 10)
+        let gap = time - lastTime
+        lastTime = time
+        now = time
 
         if n == 0 {                                              // all lifted
             if phase == .locked, var s = lockedSample {
@@ -155,23 +241,24 @@ public struct GestureRecognizer: Sendable {
         }
         if n >= 3 && !began { began = true; out.began = true }
         if phase == .cancelled { return out }
-        if touches.count >= 5 && phase != .locked { phase = .cancelled; return out }
+        // More contacts than a swipe has: a palm. With thumb rejection one resting extra is fine.
+        if n > (config.thumbRejection ? 5 : 4) && phase != .locked { phase = .cancelled; return out }
 
         switch phase {
         case .idle, .tracking:
-            guard n >= 3 else { return out }          // partial lift before the lock: wait
-            // New finger set (more fingers, or a different finger): restart measuring.
-            var fresh = phase == .idle || n > count
-            if !fresh && n == count {
-                for i in 0..<n where !ids[0..<count].contains(touches[i].id) { fresh = true; break }
+            guard sync(touches, gap: gap) else { return out }      // measurement (re)started this frame
+            guard present.nonzeroBitCount >= 3 else { return out } // fewer than three down: wait
+            var mask = present
+            if config.thumbRejection {
+                switch consensus() {
+                case .wait: return out
+                case .cancel: phase = .cancelled; return out
+                case let .group(m): mask = m
+                }
+                if mask.nonzeroBitCount > 4 { phase = .cancelled; return out }   // five fingers: a palm
             }
-            if fresh {
-                phase = .tracking
-                count = n
-                for i in 0..<n { ids[i] = touches[i].id; sx[i] = touches[i].x; sy[i] = touches[i].y }
-                return out
-            }
-            guard n == count, n == 3 || n == 4, let (dx, dy) = average(touches) else { return out }
+            let k = mask.nonzeroBitCount
+            guard k == 3 || k == 4, let (dx, dy) = average(touches, mask: mask) else { return out }
             let px = abs(dx) * aspect.w, py = abs(dy) * aspect.h
             // A ratio of 1 would lock a 45° diagonal to whichever axis is a hair ahead.
             let ratio = max(config.ratio, Self.minimumLockRatio)
@@ -179,14 +266,23 @@ public struct GestureRecognizer: Sendable {
             if px >= py * ratio && abs(dx) >= config.lockDistance { axis = .horizontal }
             else if py >= px * ratio && abs(dy) >= config.lockDistance { axis = .vertical }
             else { return out }
+            freeze(mask)                                           // the gesture's fingers, from now on
             phase = .locked
-            let s = SwipeSample(fingers: n, axis: axis, displacement: axis == .horizontal ? dx : dy, velocity: 0)
+            let s = SwipeSample(fingers: k, axis: axis, displacement: axis == .horizontal ? dx : dy, velocity: 0)
             lockedSample = s
             record(time, s.displacement)
             out.locked = s
-            if s.distance >= config.threshold(fingers: n) { crossed = true; out.crossed = s }
+            if s.distance >= config.threshold(fingers: k) { crossed = true; out.crossed = s }
 
         case .locked:
+            // Its fingers are gone (a resting thumb may still be down): the gesture is over.
+            guard ids[0..<count].contains(where: { id in touches.prefix(n).contains { $0.id == id } }) else {
+                if var s = lockedSample { s.velocity = velocity(); out.ended = s }
+                let wasBegan = began
+                _ = reset()
+                out.lifted = wasBegan
+                return out
+            }
             guard var s = lockedSample, let (dx, dy) = average(touches) else { return out }
             s.displacement = s.axis == .horizontal ? dx : dy
             lockedSample = s
@@ -197,6 +293,161 @@ public struct GestureRecognizer: Sendable {
             break
         }
         return out
+    }
+
+    /// Keeps the measured contacts in step with the frame. Returns false when the measurement
+    /// (re)started this frame: first contacts, a contact that just landed (every landing point
+    /// is taken again, so fingers landing a moment apart don't look like they moved less), or
+    /// a gap of dropped frames. A contact that lifted is kept, marked absent (`present`).
+    private mutating func sync(_ touches: UnsafeBufferPointer<TouchPoint>, gap: Double) -> Bool {
+        let n = min(touches.count, 10)
+        var restart = phase == .idle || gap > Self.maxGap
+        if !restart {
+            for i in 0..<n where !ids[0..<count].contains(touches[i].id) { restart = true; break }
+        }
+        if restart {
+            phase = .tracking
+            count = n
+            for i in 0..<n {
+                ids[i] = touches[i].id; sx[i] = touches[i].x; sy[i] = touches[i].y; cx[i] = sx[i]; cy[i] = sy[i]
+                for k in 0..<4 { hx[i * 4 + k] = sx[i]; hy[i * 4 + k] = sy[i] }
+            }
+            present = UInt16((1 << n) - 1)
+            groupSince = nil
+            return false
+        }
+        present = 0
+        hslot = (hslot + 1) & 3
+        for j in 0..<count {
+            if let t = touches.prefix(n).first(where: { $0.id == ids[j] }) {
+                cx[j] = t.x; cy[j] = t.y
+                present |= 1 << j
+            }                                                       // lifted for now: keeps its last position
+            hx[j * 4 + hslot] = cx[j]; hy[j * 4 + hslot] = cy[j]
+        }
+        return true
+    }
+
+    private enum Consensus { case wait, cancel, group(UInt16) }
+
+    /// Finds the gesture's fingers among the measured contacts by how they move, not where
+    /// they are. Bit j of the group is ids[j].
+    private mutating func consensus() -> Consensus {
+        // Proportions of the trackpad, so equal numbers mean equal distances on the glass.
+        let longer = max(aspect.w, aspect.h, 1e-9)
+        let ax = aspect.w / longer, ay = aspect.h / longer
+        let oldest = (hslot + 1) & 3                            // 3 frames back (~25 ms)
+        for j in 0..<count where present & (1 << j) != 0 {
+            mvx[j] = Double(cx[j] - sx[j]) * ax
+            mvy[j] = Double(cy[j] - sy[j]) * ay
+            mlen[j] = (mvx[j] * mvx[j] + mvy[j] * mvy[j]).squareRoot()
+            rvx[j] = Double(cx[j] - hx[j * 4 + oldest]) * ax
+            rvy[j] = Double(cy[j] - hy[j * 4 + oldest]) * ay
+            rlen[j] = (rvx[j] * rvx[j] + rvy[j] * rvy[j]).squareRoot()
+            compat[j] = 0
+        }
+        // Contacts that may be a thumb. None: every contact is a finger.
+        var zone: UInt16 = 0
+        for j in 0..<count where present & (1 << j) != 0 && config.inThumbArea(sx[j]) { zone |= 1 << j }
+        if zone == 0 { return .group(present) }
+        // Which pairs move together.
+        let minMove = config.lockDistance * Self.consensusMinMove
+        for i in 0..<count where present & (1 << i) != 0 {
+            for j in (i + 1)..<count where present & (1 << j) != 0 && together(i, j, minMove: minMove) {
+                compat[i] |= 1 << j; compat[j] |= 1 << i
+            }
+        }
+        // The largest group whose members all move together (four, else three); among equal
+        // groups the one that moved most. At most 2^10 masks, before the lock only.
+        var best: UInt16 = 0, bestMove = -1.0
+        for size in stride(from: min(4, present.nonzeroBitCount), through: 3, by: -1) {
+            for m in 1..<(1 << count) where m.nonzeroBitCount == size && UInt16(m) & ~present == 0 {
+                let mask = UInt16(m)
+                var clique = true, moved = 0.0
+                for j in 0..<count where mask & (1 << j) != 0 {
+                    if (compat[j] | (1 << j)) & mask != mask { clique = false; break }
+                    moved += mlen[j]
+                }
+                if clique && moved > bestMove { best = mask; bestMove = moved }
+            }
+            if best != 0 { break }
+        }
+        guard best != 0 else { return .wait }          // nothing moving together yet (or 2 fingers + thumb)
+
+        // The group's movement (since landing, and recently), and the others next to it.
+        var gx = 0.0, gy = 0.0, hx2 = 0.0, hy2 = 0.0
+        let k = Double(best.nonzeroBitCount)
+        for j in 0..<count where best & (1 << j) != 0 { gx += mvx[j]; gy += mvy[j]; hx2 += rvx[j]; hy2 += rvy[j] }
+        gx /= k; gy /= k; hx2 /= k; hy2 /= k
+        let glen = (gx * gx + gy * gy).squareRoot()
+        let rglen = (hx2 * hx2 + hy2 * hy2).squareRoot()
+        guard glen > 0 else { return .wait }
+        if groupSince == nil { groupSince = now }
+        let watched = now - (groupSince ?? now) >= Self.observeFor           // observation window done
+        let moved = glen / config.lockDistance                               // group movement, × lockDistance
+        let decided = moved >= Self.decideBy && watched
+        var group = best
+        for e in 0..<count where present & (1 << e) != 0 && best & (1 << e) == 0 {
+            if zone & (1 << e) == 0 {                                        // not where a thumb rests: a finger
+                if best.nonzeroBitCount >= 4 { return .cancel }
+                group |= 1 << e
+                continue
+            }
+            // Its movement relative to the group's: since landing, and over the last ~25 ms (a
+            // finger that started late is behind on the first and matches on the second).
+            let total = mlen[e] / glen
+            let recent = rglen > 0 ? rlen[e] / rglen : total
+            let share = max(total, recent)
+            let useRecent = rglen > 0 && recent > total
+            let (ex, ey, el, rx, ry, rl) = useRecent ? (rvx[e], rvy[e], rlen[e], hx2, hy2, rglen) : (mvx[e], mvy[e], mlen[e], gx, gy, glen)
+            let cosine = el > 0 ? (ex * rx + ey * ry) / (el * rl) : 0
+            if share < Self.stillShare {                                     // still: resting
+                if moved < Self.decideStill || !watched { return .wait }
+                continue
+            }
+            if share >= Self.restingShare && cosine < 0.5 {                  // clearly moving its own way
+                if moved < Self.decideStill || !watched { return .wait }
+                continue
+            }
+            if share >= Self.participatingShare && cosine >= Self.consensusMinCosine {
+                // Moving like one of the fingers. With four already, that's five: a palm.
+                if best.nonzeroBitCount >= 4 { return .cancel }
+                if !decided { return .wait }                                 // it should join the group
+                group |= 1 << e
+                continue
+            }
+            if !decided { return .wait }                                     // unclear (or barely moving): wait
+        }
+        return group.nonzeroBitCount > 4 ? .cancel : .group(group)
+    }
+
+    /// Both contacts clearly moved, by similar amounts, in the same direction.
+    private func together(_ a: Int, _ b: Int, minMove: Double) -> Bool {
+        let la = mlen[a], lb = mlen[b]
+        guard la >= minMove, lb >= minMove, min(la, lb) >= max(la, lb) * Self.consensusMinRatio else { return false }
+        let dot = mvx[a] * mvx[b] + mvy[a] * mvy[b]
+        return dot > 0 && dot >= Self.consensusMinCosine * la * lb
+    }
+
+    /// Keeps only the group's contacts (bit j = ids[j]) as the gesture's fingers.
+    private mutating func freeze(_ mask: UInt16) {
+        var k = 0
+        for j in 0..<count where mask & (1 << j) != 0 {
+            ids[k] = ids[j]; sx[k] = sx[j]; sy[k] = sy[j]; cx[k] = cx[j]; cy[k] = cy[j]
+            k += 1
+        }
+        count = k
+        present = UInt16((1 << k) - 1)
+    }
+
+    /// Average travel of the group's contacts (bit j = ids[j]) that are down.
+    private func average(_ touches: UnsafeBufferPointer<TouchPoint>, mask: UInt16) -> (Double, Double)? {
+        var dx = 0.0, dy = 0.0, k = 0
+        for i in 0..<min(touches.count, 10) {
+            guard let j = ids[0..<count].firstIndex(of: touches[i].id), mask & (1 << j) != 0 else { continue }
+            dx += Double(touches[i].x - sx[j]); dy += Double(touches[i].y - sy[j]); k += 1
+        }
+        return k > 0 ? (dx / Double(k), dy / Double(k)) : nil
     }
 
     /// Average travel of the fingers that are still down and were part of the measurement.

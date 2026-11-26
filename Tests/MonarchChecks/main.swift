@@ -711,5 +711,66 @@ run("FastWorkspaceSwitchTests.testSlowSwitchesStillWork") { FastWorkspaceSwitchT
 run("FastWorkspaceSwitchTests.testParkCountsSurviveOverlap") { FastWorkspaceSwitchTests().testParkCountsSurviveOverlap() }
 run("FastWorkspaceSwitchTests.testRestoreTargetIsTheNewest") { FastWorkspaceSwitchTests().testRestoreTargetIsTheNewest() }
 run("FastWorkspaceSwitchTests.testLeavingSkipsParkedAndOtherDisplays") { FastWorkspaceSwitchTests().testLeavingSkipsParkedAndOtherDisplays() }
+run("FastWorkspaceSwitchTests.testSlowRestoreStaysInFlightUntilSeen") { FastWorkspaceSwitchTests().testSlowRestoreStaysInFlightUntilSeen() }
+run("OperationSequenceTests.testOlderSwitchFinishingLateDoesNotFocus") { OperationSequenceTests().testOlderSwitchFinishingLateDoesNotFocus() }
+run("OperationSequenceTests.testOtherDisplaysAreIndependent") { OperationSequenceTests().testOtherDisplaysAreIndependent() }
+run("OperationSequenceTests.testLateResultsForAWindowMovedSinceAreDropped") { OperationSequenceTests().testLateResultsForAWindowMovedSinceAreDropped() }
+run("OperationSequenceTests.testForgottenWindowAcceptsAnyResult") { OperationSequenceTests().testForgottenWindowAcceptsAnyResult() }
+run("SwitcherRepeatTests.testUsesSystemSettingsWithinLimits") { SwitcherRepeatTests().testUsesSystemSettingsWithinLimits() }
+run("SwitcherRepeatTests.testRepeatedStepsWrap") { SwitcherRepeatTests().testRepeatedStepsWrap() }
+run("ParkedNudgeTests.testMacOSNudgingAParkedWindowKeepsItParked") { ParkedNudgeTests().testMacOSNudgingAParkedWindowKeepsItParked() }
+run("ParkedNudgeTests.testBroughtBackOnScreenIsUnparked") { ParkedNudgeTests().testBroughtBackOnScreenIsUnparked() }
+run("ParkedNudgeTests.testUnreadSpotIsLearnedWhileOffScreen") { ParkedNudgeTests().testUnreadSpotIsLearnedWhileOffScreen() }
+run("ParkedNudgeTests.testStrandedWindowIsRecognised") { ParkedNudgeTests().testStrandedWindowIsRecognised() }
+run("ConfigFileTests.testMissingFileIsFirstRun") { ConfigFileTests().testMissingFileIsFirstRun() }
+run("ConfigFileTests.testBrokenFileIsNeverOverwritten") { ConfigFileTests().testBrokenFileIsNeverOverwritten() }
+run("ConfigFileTests.testUnreadableFileIsNeverOverwritten") { ConfigFileTests().testUnreadableFileIsNeverOverwritten() }
+run("ConfigFileTests.testGoodFileLoads") { ConfigFileTests().testGoodFileLoads() }
+run("ParkedOrphanTests.testRealParkedFramesAreRecognised") { ParkedOrphanTests().testRealParkedFramesAreRecognised() }
+run("ParkedOrphanTests.testOtherOffScreenWindowsAreLeftAlone") { ParkedOrphanTests().testOtherOffScreenWindowsAreLeftAlone() }
+run("ParkedOrphanTests.testClosedWindowLeavesNothingInFlight") { ParkedOrphanTests().testClosedWindowLeavesNothingInFlight() }
+run("BuildScriptTests.testFailedBuildStopsTheScript") { try BuildScriptTests().testFailedBuildStopsTheScript() }
+run("ThumbRejectionTests.testThumbPlusTwoFingersIsAScroll") { ThumbRejectionTests().testThumbPlusTwoFingersIsAScroll() }
+run("ThumbRejectionTests.testThumbPlusThreeFingersIsAThreeFingerSwipe") { ThumbRejectionTests().testThumbPlusThreeFingersIsAThreeFingerSwipe() }
+run("ThumbRejectionTests.testThumbPlusThreeFingersHorizontal") { ThumbRejectionTests().testThumbPlusThreeFingersHorizontal() }
+run("ThumbRejectionTests.testFourMovingFingersStayFour") { ThumbRejectionTests().testFourMovingFingersStayFour() }
+run("ThumbRejectionTests.testAThumbThatSwipesCounts") { ThumbRejectionTests().testAThumbThatSwipesCounts() }
+run("ThumbRejectionTests.testTurnedOffCountsTheThumb") { ThumbRejectionTests().testTurnedOffCountsTheThumb() }
+run("ThumbRejectionTests.testSettingDecodesAndDefaultsOn") { try ThumbRejectionTests().testSettingDecodesAndDefaultsOn() }
+run("MotionConsensusTests.testThumbAnywhereInLeftThirdGivesThreeFingers") { MotionConsensusTests().testThumbAnywhereInLeftThirdGivesThreeFingers() }
+run("MotionConsensusTests.testRestingContactOutsideLeftThirdIsAFinger") { MotionConsensusTests().testRestingContactOutsideLeftThirdIsAFinger() }
+run("MotionConsensusTests.testTwoFingersPlusContactOnTheRightIsThreeFingers") { MotionConsensusTests().testTwoFingersPlusContactOnTheRightIsThreeFingers() }
+run("MotionConsensusTests.testFourFingersPlusContactOnTheRightCancels") { MotionConsensusTests().testFourFingersPlusContactOnTheRightCancels() }
+run("MotionConsensusTests.testFourFingersPlusThumbIsFour") { MotionConsensusTests().testFourFingersPlusThumbIsFour() }
+run("MotionConsensusTests.testFiveMovingFingersCancel") { MotionConsensusTests().testFiveMovingFingersCancel() }
+run("MotionConsensusTests.testAllStillDoesNothing") { MotionConsensusTests().testAllStillDoesNothing() }
+run("MotionConsensusTests.testPinchIsNotASwipe") { MotionConsensusTests().testPinchIsNotASwipe() }
+run("MotionConsensusTests.testThumbDriftingWithTheHandIsLeftOut") { MotionConsensusTests().testThumbDriftingWithTheHandIsLeftOut() }
+run("MotionConsensusTests.testThumbDraggingSidewaysIsLeftOut") { MotionConsensusTests().testThumbDraggingSidewaysIsLeftOut() }
+run("MotionConsensusTests.testLateStartingFourthFingerStillCounts") { MotionConsensusTests().testLateStartingFourthFingerStillCounts() }
+run("MotionConsensusTests.testSlowSwipeStillLocks") { MotionConsensusTests().testSlowSwipeStillLocks() }
+run("MotionConsensusTests.testThumbLiftingMidGestureCausesNoJump") { MotionConsensusTests().testThumbLiftingMidGestureCausesNoJump() }
+run("MotionConsensusTests.testThumbLandingAfterLockIsIgnored") { MotionConsensusTests().testThumbLandingAfterLockIsIgnored() }
+run("MotionConsensusTests.testGestureEndsWhenItsFingersLiftEvenWithThumbDown") { MotionConsensusTests().testGestureEndsWhenItsFingersLiftEvenWithThumbDown() }
+run("MotionConsensusTests.testDroppedFramesRestartTheMeasurement") { MotionConsensusTests().testDroppedFramesRestartTheMeasurement() }
+run("ConfigPatchTests.testKeepsEditsNotYetReloaded") { ConfigPatchTests().testKeepsEditsNotYetReloaded() }
+run("ConfigPatchTests.testBrokenFileIsNeverWritten") { ConfigPatchTests().testBrokenFileIsNeverWritten() }
+run("ConfigPatchTests.testNoFileWritesDefaultsWithTheChange") { try ConfigPatchTests().testNoFileWritesDefaultsWithTheChange() }
+run("LaunchValidationTests.testOutOfRangeValuesFallBackToDefaults") { LaunchValidationTests().testOutOfRangeValuesFallBackToDefaults() }
+run("DisplayArrangementTests.testBlinkBackToTheSameSetupDoesNothing") { DisplayArrangementTests().testBlinkBackToTheSameSetupDoesNothing() }
+run("DisplayArrangementTests.testARealChangeRestoresOnce") { DisplayArrangementTests().testARealChangeRestoresOnce() }
+run("SystemShortcutTests.testOnlyOwnedShortcutsAreTurnedOff") { SystemShortcutTests().testOnlyOwnedShortcutsAreTurnedOff() }
+run("SystemShortcutTests.testDefaultBindingsOwnAllThree") { SystemShortcutTests().testDefaultBindingsOwnAllThree() }
+run("BootSessionTests.testEntriesFromAnEarlierBootAreDropped") { BootSessionTests().testEntriesFromAnEarlierBootAreDropped() }
+run("BootSessionTests.testSameBootKeepsEverything") { BootSessionTests().testSameBootKeepsEverything() }
+run("BootSessionTests.testFilesWithoutABootAreKeptAndStamped") { try BootSessionTests().testFilesWithoutABootAreKeptAndStamped() }
+run("QuitRestoreTests.testBuildScriptRestartsWithSIGHUP") { try QuitRestoreTests().testBuildScriptRestartsWithSIGHUP() }
+run("QuitRestoreTests.testQuitBringsParkedWindowsBack") { try QuitRestoreTests().testQuitBringsParkedWindowsBack() }
+run("ThumbAreaTests.testDefaultIsLeftThird") { ThumbAreaTests().testDefaultIsLeftThird() }
+run("ThumbAreaTests.testRightAreaForLeftHanded") { ThumbAreaTests().testRightAreaForLeftHanded() }
+run("ThumbAreaTests.testBothSides") { ThumbAreaTests().testBothSides() }
+run("ThumbAreaTests.testAnywhere") { ThumbAreaTests().testAnywhere() }
+run("ThumbAreaTests.testWidth") { ThumbAreaTests().testWidth() }
+run("ThumbAreaTests.testDecodingAndValidation") { try ThumbAreaTests().testDecodingAndValidation() }
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

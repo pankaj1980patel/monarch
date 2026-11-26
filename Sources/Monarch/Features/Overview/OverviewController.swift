@@ -56,7 +56,10 @@ final class OverviewController {
         self.perf = perf
         self.bridge = bridge
         // Window frames settle a moment after moves: refresh (coalesced) while open.
-        engine.onUpdate { [unowned self] _ in stateChanged() }
+        // Open: every change shows. Closed: only layout changes are worth preparing cards for;
+        // title-only changes are picked up when it opens (images are cached per content).
+        engine.onUpdate { [unowned self] _ in if isOpen { stateChanged() } }
+        engine.onLayoutChange { [unowned self] _ in if !isOpen { stateChanged() } }
         engine.onRemove { [unowned self] _ in stateChanged() }
     }
 
@@ -71,7 +74,10 @@ final class OverviewController {
         openedAt = PerformanceMonitor.now()
         grabbed = nil
         dropTarget = nil
+        keepWindow = nil                          // a selection kept from the last open isn't this one's
         rebuild(initialSelection: true)
+        Motion.announce("Overview")
+        DispatchQueue.main.async { [weak self] in self?.engine.pruneDeadWindows() }   // ghosts gone next refresh
         // Timed when Core Animation has committed the first frame, not right after orderFront.
         CATransaction.begin()
         CATransaction.setCompletionBlock { [perf] in perf.record("14 overview: open → first frame", since: eventTime) }
@@ -106,6 +112,7 @@ final class OverviewController {
             openedAt = PerformanceMonitor.now()
             grabbed = nil
             dropTarget = nil
+            keepWindow = nil
             rebuild(initialSelection: true)
             for s in screens { s.panel.prepareInteractive(visibility: 0) }
         } else {
@@ -146,6 +153,12 @@ final class OverviewController {
 
     /// Workspace state changed (a move finished, a window closed, a display changed).
     func refreshIfOpen() { stateChanged() }
+
+    /// A display was plugged in or out: an open overview would act on displays that are gone.
+    func displaysChanged() {
+        if isOpen { close() }
+        refreshIfOpen()
+    }
 
     /// Windows or workspaces changed. Open: refresh soon. Closed: prepare the cards in the
     /// background (batched, at most once a second), so opening only swaps in images that are
@@ -196,7 +209,7 @@ final class OverviewController {
     private func rebuild(initialSelection: Bool) {
         let state = workspaces.state
         let list = displays.displays.sorted { ($0.frame.minY, $0.frame.minX) < ($1.frame.minY, $1.frame.minX) }
-        let z = AutoFocusManager.zOrder()                        // one window-list fetch for all displays
+        let live = WorkspaceManager.Live(WindowList.onScreen())   // one window-list fetch for all displays
         var built: [Screen] = []
         for d in list {
             let parked = state.hidden.compactMap { k, e -> (id: UInt32, ws: Int, z: Int)? in
@@ -204,7 +217,7 @@ final class OverviewController {
                 return (id, e.ws, e.z)
             }
             let cards = OverviewModel.cards(active: state.activeWorkspace(d.uuid),
-                                            visible: workspaces.visibleWindows(on: d, zOrder: z), parked: parked)
+                                            visible: workspaces.shownWindows(on: d, live: live), parked: parked)
             let layout = OverviewModel.layout(cardCount: cards.count, size: d.frame.size)
             let shown = cards.map { $0.windows.count <= layout.maxRows ? $0.windows.count : max(0, layout.maxRows - 1) }
             let isNew = panels[d.id] == nil
@@ -314,8 +327,10 @@ final class OverviewController {
             else if isValid(selection) { goCard(selection.screen, selection.card) }
         default:
             if let ch = e.charactersIgnoringModifiers, let n = Int(ch), (1...9).contains(n) {
+                // The display whose panel has the keyboard (the mouse may be on another one by now).
                 let mouse = AutoFocusManager.cursor()
-                if let d = displays.displays.first(where: { $0.frame.contains(mouse) }) {
+                let keyed = screens.first { $0.panel.owns(e.window) }?.display
+                if let d = keyed ?? displays.displays.first(where: { $0.frame.contains(mouse) }) {
                     close()
                     workspaces.switchTo(n, on: d, eventTime: PerformanceMonitor.now())
                 }
@@ -526,17 +541,20 @@ private final class OverviewPanel {
     func show(animated: Bool) {
         generation += 1
         resetTransform()
+        let animated = animated && !Motion.reduced
         panel.alphaValue = animated ? 0 : 1
         panel.orderFrontRegardless()
         if animated {
             NSAnimationContext.runAnimationGroup { ctx in
-                ctx.duration = 0.12
+                ctx.duration = 0.06            // opening costs almost nothing now: keep the fade short
                 panel.animator().alphaValue = 1
             }
         }
     }
 
     func makeKey() { panel.makeKey(); panel.makeFirstResponder(view) }
+    /// True if `window` is this display's panel (the one a key event came from).
+    func owns(_ window: NSWindow?) -> Bool { window === panel }
     func hide() { generation += 1; resetTransform(); panel.orderOut(nil) }
 
     // Interactive: window alpha plus a slight zoom of the content (1.04 → 1 as it opens).
@@ -643,6 +661,9 @@ private final class OverviewView: NSView {
         super.init(frame: .zero)
         wantsLayer = true
         layerContentsRedrawPolicy = .never
+        setAccessibilityElement(true)
+        setAccessibilityRole(.group)
+        setAccessibilityLabel("Monarch overview: workspace cards. Arrows move, Return goes, Escape closes.")
         header.anchorPoint = .zero
         ring.fillColor = nil
         ring.lineWidth = 2.5

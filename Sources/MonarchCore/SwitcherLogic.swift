@@ -49,3 +49,26 @@ public enum SwitcherLogic {
 
     private static func wrap(_ i: Int, _ n: Int) -> Int { ((i % n) + n) % n }
 }
+
+/// Holding Tab (or `) while ⌘ is down keeps moving through the switcher, like a held key.
+/// Carbon hotkeys fire once per press, so Monarch repeats them itself, using the system's
+/// key-repeat settings (System Settings → Keyboard), within limits that keep it usable.
+public enum SwitcherRepeat {
+    /// Seconds before the first repeat and between repeats.
+    public static func timing(systemDelay: Double, systemInterval: Double) -> (delay: Double, interval: Double) {
+        (min(max(systemDelay, 0.2), 0.8), min(max(systemInterval, 0.06), 0.25))
+    }
+}
+
+/// macOS's own switcher shortcuts and their symbolic hotkey ids: 1 = ⌘Tab, 2 = ⌘⇧Tab,
+/// 6 = ⌘` (the key above Tab).
+public enum SystemShortcuts {
+    public static let all: [(id: Int32, shortcut: String)] = [(1, "cmd+tab"), (2, "cmd+shift+tab"), (6, "cmd+`")]
+
+    /// The system shortcuts to turn off: only those Monarch has registered itself. Turning all
+    /// three off as soon as ⌘Tab worked took ⌘` away from users who never rebound it.
+    public static func owned(by registered: [Shortcut]) -> Set<Int32> {
+        let mine = Set(registered)
+        return Set(all.compactMap { e in Shortcut(e.shortcut).flatMap { mine.contains($0) ? e.id : nil } })
+    }
+}

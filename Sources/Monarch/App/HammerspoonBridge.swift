@@ -32,7 +32,8 @@ final class HammerspoonBridge {
         token = DistributedNotificationCenter.default().addObserver(
             forName: Self.commandNote, object: nil, queue: .main
         ) { note in
-            let text = note.object as? String ?? ""
+            // Commands are a few words: anything longer isn't one of ours.
+            let text = (note.object as? String).flatMap { $0.utf8.count <= 128 ? $0 : nil } ?? ""
             MainActor.assumeIsolated {
                 // Distributed notifications carry no sender, so any app could post these. They're
                 // only meant for Hammerspoon's fallback config: ignore them unless it's running.

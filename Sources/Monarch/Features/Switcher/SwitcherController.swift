@@ -6,8 +6,8 @@ import MonarchCore
 /// - ⌘Tab: every window on both screens and all workspaces, most recently used first.
 ///   A quick tap toggles between the last two windows without showing the panel.
 /// - ⌘`: only the current workspace of the screen under the mouse.
-/// - While ⌘ is held: Tab / ⇧Tab and ← / → move, ↩ picks, ⎋ cancels, hover selects,
-///   click picks, click outside cancels. Releasing ⌘ picks.
+/// - While ⌘ is held: Tab / ⇧Tab and ← / → move (holding Tab keeps moving), ↩ picks,
+///   ⎋ cancels, hover selects, click picks, click outside cancels. Releasing ⌘ picks.
 /// - Only the picked window comes forward. A window on a hidden workspace first has its
 ///   workspace revealed (by Hammerspoon until step 6).
 ///
@@ -32,6 +32,10 @@ final class SwitcherController {
     private var showWork: DispatchWorkItem?
     private var monitors: [Any] = []
     private var openedAt: Double = 0
+    private var repeatWork: DispatchWorkItem?
+    /// Watches ⌘ while the panel is open. The flags monitor misses its release during Secure
+    /// Input (a password field has the keyboard): the panel then stayed open and swallowed ⌘-keys.
+    private var commandWatch: Timer?
 
     init(engine: WindowEngine, displays: DisplayManager, autoFocus: AutoFocusManager,
          hotkeys: HotkeyManager, workspaces: WorkspaceManager, perf: PerformanceMonitor) {
@@ -57,6 +61,7 @@ final class SwitcherController {
         if let list {
             index = SwitcherLogic.move(index, by: step, count: list.count)
             panel.select(index)
+            startRepeat(action, step: step)
             return
         }
         open(step: step, workspaceOnly: workspaceOnly, eventTime: eventTime)
@@ -124,6 +129,14 @@ final class SwitcherController {
         }) { monitors.append(m) }
 
         perf.record("10 ⌘Tab: key → list ready", since: eventTime)
+        let watch = Timer(timeInterval: 0.04, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { if self?.list != nil, !Self.commandDown() { self?.finish(commit: true) } }
+        }
+        watch.tolerance = 0.02
+        RunLoop.main.add(watch, forMode: .common)
+        commandWatch = watch
+        // Ghost windows (closed without a notification) are dropped for next time.
+        DispatchQueue.main.async { [weak self] in self?.engine.pruneDeadWindows() }
 
         // ⌘ already up (very quick tap): switch straight away, never flash the panel.
         if !Self.commandDown() { finish(commit: true); return }
@@ -133,6 +146,28 @@ final class SwitcherController {
         }
         showWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + Self.showDelay, execute: work)
+        startRepeat(workspaceOnly ? (step > 0 ? .switcherWorkspaceNext : .switcherWorkspacePrevious)
+                                  : (step > 0 ? .switcherNext : .switcherPrevious), step: step)
+    }
+
+    /// Holding the key: keep moving while it and ⌘ stay down (Carbon hotkeys fire once per
+    /// press). Checks the key's live state each time, so letting go stops it at once.
+    private func startRepeat(_ action: Action, step: Int) {
+        repeatWork?.cancel()
+        guard let key = hotkeys.registrations[action]?.shortcut.keyCode else { return }
+        let t = SwitcherRepeat.timing(systemDelay: NSEvent.keyRepeatDelay, systemInterval: NSEvent.keyRepeatInterval)
+        func schedule(after delay: Double) {
+            let work = DispatchWorkItem { [weak self] in
+                guard let self, let list = self.list, Self.commandDown(),
+                      CGEventSource.keyState(.combinedSessionState, key: CGKeyCode(key)) else { return }
+                self.index = SwitcherLogic.move(self.index, by: step, count: list.count)
+                self.panel.select(self.index)
+                schedule(after: t.interval)
+            }
+            repeatWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        }
+        schedule(after: t.delay)
     }
 
     private func finish(commit: Bool) {
@@ -141,6 +176,10 @@ final class SwitcherController {
         self.list = nil
         showWork?.cancel()
         showWork = nil
+        repeatWork?.cancel()
+        repeatWork = nil
+        commandWatch?.invalidate()
+        commandWatch = nil
         panel.hide()
         for m in monitors { NSEvent.removeMonitor(m) }
         monitors.removeAll()
@@ -153,7 +192,8 @@ final class SwitcherController {
     /// and most recent at once, so a second quick ⌘Tab toggles back instead of picking it again.
     private func pick(_ id: CGWindowID, since start: Double) {
         autoFocus.noteFocusing(id)
-        if workspaceManager.state.isParked(id) { workspaceManager.reveal(id, eventTime: start); return }
+        // Parked (or stranded off screen with no workspace): bring it back first.
+        if workspaceManager.state.isParked(id) || workspaceManager.isStranded(id) { workspaceManager.reveal(id, eventTime: start); return }
         guard let w = engine.windows[id], let app = engine.apps[w.pid] else { return }
         WindowFocuser.focus(id, of: app, perf: perf, metric: "11 ⌘Tab: key → window focused", since: start)
     }

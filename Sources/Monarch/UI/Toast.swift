@@ -27,11 +27,12 @@ final class Toast {
         generation += 1
         let gen = generation
         panel.showOpaque()
+        Motion.announce(text)
 
         hideWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
             NSAnimationContext.runAnimationGroup({ ctx in
-                ctx.duration = 0.2
+                ctx.duration = Motion.fade(0.2)
                 self?.panel?.animator().alphaValue = 0
             }, completionHandler: { MainActor.assumeIsolated {
                 guard let self, self.generation == gen else { return }
@@ -83,5 +84,21 @@ extension NSWindow {
         }
         alphaValue = 1
         orderFrontRegardless()
+    }
+}
+
+/// Accessibility: Reduce Motion and VoiceOver announcements for Monarch's own panels.
+enum Motion {
+    /// System Settings → Accessibility → Display → Reduce motion.
+    static var reduced: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    /// Fade length to use: none with Reduce Motion.
+    static func fade(_ seconds: Double) -> Double { reduced ? 0 : seconds }
+
+    /// Speaks `text` with VoiceOver (no-op without it): the panels are non-activating, so
+    /// VoiceOver wouldn't otherwise notice them.
+    static func announce(_ text: String) {
+        guard NSWorkspace.shared.isVoiceOverEnabled else { return }
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 }

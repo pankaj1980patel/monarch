@@ -49,6 +49,9 @@ final class AutoFocusManager {
     /// The display a parked window belongs to (from the workspaces), so a window picked on
     /// another workspace is recorded as recently used even before it's back on screen.
     var parkedDisplay: ((CGWindowID) -> UInt32?)?
+    /// True while Monarch's own overlays (overview, switcher) have the keyboard: moving the
+    /// mouse must not focus a window then, or arrows / Esc / ↩ go to the app underneath.
+    var suspended: (() -> Bool)?
 
     // MARK: Configuration
 
@@ -122,7 +125,8 @@ final class AutoFocusManager {
     // MARK: Cross-screen
 
     private func crossed(to displayID: UInt32, at point: CGPoint) {
-        guard active, crossScreen, let display = displays.displays.first(where: { $0.id == displayID }) else { return }
+        guard active, crossScreen, suspended?() != true,
+              let display = displays.displays.first(where: { $0.id == displayID }) else { return }
         let start = PerformanceMonitor.now()
         if let f = engine.focusedID { record(f) }   // the screen we left: remember what was in use
         guard let target = FocusLogic.windowForScreen(
@@ -135,7 +139,7 @@ final class AutoFocusManager {
     // MARK: Same-app hover
 
     private func hovered() {
-        guard active, sameAppHover, let fid = engine.focusedID, let focused = engine.windows[fid] else { return }
+        guard active, sameAppHover, suspended?() != true, let fid = engine.focusedID, let focused = engine.windows[fid] else { return }
         let p = Self.cursor()
         if focused.frame.contains(p) { return }                     // still over the focused window
         let hiddenApp = engine.hiddenPIDs.contains(focused.pid)
@@ -193,6 +197,9 @@ final class AutoFocusManager {
     private func focus(_ id: CGWindowID, metric: String, since start: Double) {
         guard let w = engine.windows[id], let app = engine.apps[w.pid] else { return }
         if let d = Geometry.display(for: w.frame, in: displays.displays) { history.record(window: id, display: d.id) }
+        // Focused from now on, not when macOS confirms: a second quick ⌃⌥⇧ arrow then starts
+        // from this window (it used to start again from the old one, so moved only one step).
+        engine.noteFocusing(id)
         WindowFocuser.focus(id, of: app, perf: perf, metric: metric, since: start)
     }
 
