@@ -289,3 +289,32 @@ public struct DisplayArrangement: Sendable, Equatable {
     /// Not managing workspaces: the new arrangement is simply the current one.
     public mutating func accept(_ now: Set<String>) { settled = now }
 }
+
+extension WorkspaceState {
+    /// Removes the entries of windows that actually show on a display (a park cut off by a
+    /// quit, an app that refused the move): they look normal, so they aren't parked. `shows`
+    /// says whether a window is on a display; `moving` skips parks still on their way.
+    @discardableResult
+    public mutating func dropShown(shows: (UInt32) -> Bool, moving: (UInt32) -> Bool = { _ in false }) -> [UInt32] {
+        var out: [UInt32] = []
+        for k in Array(hidden.keys) {
+            guard let id = UInt32(k), !moving(id), shows(id) else { continue }
+            hidden.removeValue(forKey: k)
+            out.append(id)
+        }
+        return out.sorted()
+    }
+
+    /// Removes and returns the entries parked on the workspace their display is showing (a
+    /// restore cut off by a quit or restart): no switch would ever bring them back.
+    /// `eligible` filters (window exists, not being moved).
+    public mutating func takeOnShowingWorkspace(eligible: (UInt32) -> Bool) -> [(id: UInt32, entry: ParkedWindow)] {
+        var out: [(id: UInt32, entry: ParkedWindow)] = []
+        for (k, e) in hidden where e.ws == activeWorkspace(e.scr) {
+            guard let id = UInt32(k), eligible(id) else { continue }
+            out.append((id, e))
+        }
+        for o in out { hidden.removeValue(forKey: String(o.id)) }
+        return out.sorted { $0.id < $1.id }
+    }
+}

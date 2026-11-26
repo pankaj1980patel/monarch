@@ -123,10 +123,12 @@ struct QuitRestoreTests {
         return try String(contentsOf: root.appendingPathComponent(path), encoding: .utf8)
     }
 
-    func testBuildScriptRestartsWithSIGHUP() throws {
+    func testBuildScriptRestartsWithSIGUSR1AndWaits() throws {
+        // SIGHUP is what a closing terminal sends: it must stay a normal quit.
         let script = try source("scripts/build-app.sh")
         let kills = script.split(separator: "\n").filter { $0.contains("pkill") }
-        expect(!kills.isEmpty && kills.allSatisfy { $0.contains("-HUP") })
+        expect(!kills.isEmpty && kills.allSatisfy { $0.contains("-USR1") })
+        expect(script.contains("pgrep -x \"$APP_NAME\" >/dev/null || break"))
     }
 
     func testHandoverIdentifiesTheNewCopyByPid() throws {
@@ -144,7 +146,7 @@ struct QuitRestoreTests {
         let app = try source("Sources/Monarch/App/AppDelegate.swift")
         expect(app.contains("workspaces.prepareForQuit(keepParked: restarting)"))
         let main = try source("Sources/Monarch/App/main.swift")
-        expect(main.contains("makeSignalSource(signal: SIGHUP"))
+        expect(main.contains("makeSignalSource(signal: SIGUSR1"))
     }
 }
 
@@ -206,59 +208,83 @@ struct ThumbAreaTests {
 
 /// A three- or four-finger swipe must not also scroll the window under the mouse.
 struct ScrollGuardTests {
+    func drop(_ g: inout ScrollGuard, phase: Int = 2, momentum: Int = 0, continuous: Bool = true, _ t: Double) -> Bool {
+        g.shouldDrop(phase: phase, momentum: momentum, continuous: continuous, now: t)
+    }
+
     func testFingersLiftingOneByOneDontScroll() {
         var g = ScrollGuard()
-        g.frame(locked: true, contacts: 3, now: 0.0)
-        // The gesture ends as fingers lift; two are still moving: macOS would scroll.
-        g.frame(locked: false, contacts: 2, now: 0.1)
-        expect(g.shouldDrop(phase: 1, momentum: 0, now: 0.1))
-        expect(g.shouldDrop(phase: 2, momentum: 0, now: 0.15))
-        g.frame(locked: false, contacts: 0, now: 0.2)
-        expect(g.shouldDrop(phase: 4, momentum: 0, now: 0.3))         // within the tail
-        expect(g.shouldDrop(phase: 0, momentum: 2, now: 0.9))         // coasting
-        expect(g.shouldDrop(phase: 0, momentum: 3, now: 1.2))
+        expect(g.frame(device: 0, locked: true, now: 0.0))           // guarding starts: switch the filter on
+        expect(!g.frame(device: 0, locked: true, now: 0.05))          // only once
+        // Two of the swipe's fingers are still moving (still locked): macOS would scroll.
+        expect(drop(&g, phase: 1, 0.1) && drop(&g, 0.15))
+        g.frame(device: 0, locked: false, now: 0.2)                   // its fingers are gone
+        expect(drop(&g, phase: 4, 0.3))                               // within the tail
+        expect(drop(&g, phase: 0, momentum: 2, 0.9))                  // coasting
+        expect(!g.isIdle(now: 0.9))
+    }
+
+    func testRestingThumbDoesntKeepScrollingBlocked() {
+        // The swipe ends while the thumb stays down (frames keep coming, not locked): only the
+        // tail and the coasting are suppressed, a new scroll works.
+        var g = ScrollGuard()
+        g.frame(device: 0, locked: true, now: 0)
+        g.frame(device: 0, locked: false, now: 0.2)
+        for k in 1...50 { g.frame(device: 0, locked: false, now: 0.2 + Double(k) * 0.008) }
+        expect(!drop(&g, phase: 1, 0.7))                              // a new two-finger scroll
+        expect(!drop(&g, phase: 2, 0.75))
+    }
+
+    func testMouseWheelIsNeverBlocked() {
+        var g = ScrollGuard()
+        g.frame(device: 0, locked: true, now: 0)
+        expect(!drop(&g, phase: 0, continuous: false, 0.05))          // during the swipe
+        expect(drop(&g, phase: 2, 0.05))                              // the trackpad's scroll is
+    }
+
+    func testSecondTrackpadCantEndTheFirstsSwipe() {
+        var g = ScrollGuard()
+        g.frame(device: 0, locked: true, now: 0)
+        g.frame(device: 1, locked: true, now: 0.01)
+        g.frame(device: 1, locked: false, now: 0.05)                  // trackpad B's touch ends
+        g.frame(device: 0, locked: true, now: 0.06)
+        expect(drop(&g, 0.07))                                        // A is still swiping
+        g.frame(device: 0, locked: false, now: 0.1)
+        expect(drop(&g, 0.2) && !drop(&g, phase: 1, 0.5))
     }
 
     func testANewScrollAfterwardsWorks() {
         var g = ScrollGuard()
-        g.frame(locked: true, contacts: 3, now: 0)
-        g.frame(locked: false, contacts: 0, now: 0.2)
-        expect(!g.shouldDrop(phase: 1, momentum: 0, now: 1.0))        // a new two-finger scroll begins
-        expect(!g.shouldDrop(phase: 2, momentum: 0, now: 1.05))
-        expect(!g.shouldDrop(phase: 0, momentum: 2, now: 1.5))        // and its own coasting is kept
-    }
-
-    func testThumbAndFingerLeftDownDontScroll() {
-        var g = ScrollGuard()
-        g.frame(locked: true, contacts: 4, now: 0)
-        g.frame(locked: false, contacts: 2, now: 0.1)                 // gesture over, thumb + one finger down
-        g.frame(locked: false, contacts: 2, now: 0.5)
-        expect(g.shouldDrop(phase: 2, momentum: 0, now: 0.5))
+        g.frame(device: 0, locked: true, now: 0)
+        g.frame(device: 0, locked: false, now: 0.2)
+        expect(!drop(&g, phase: 1, 1.0))
+        expect(!drop(&g, phase: 2, 1.05))
+        expect(!drop(&g, phase: 0, momentum: 2, 1.5))                 // its own coasting is kept
+        expect(g.isIdle(now: 1.5))
     }
 
     func testOrdinaryScrollingIsNeverTouched() {
         var g = ScrollGuard()
-        g.frame(locked: false, contacts: 2, now: 0)                   // two-finger scroll (or thumb + two)
-        g.frame(locked: false, contacts: 3, now: 0.05)
-        expect(!g.shouldDrop(phase: 1, momentum: 0, now: 0.05))
-        g.frame(locked: false, contacts: 0, now: 0.2)
-        expect(!g.shouldDrop(phase: 0, momentum: 2, now: 0.3))        // its coasting too
-        expect(!g.shouldDrop(phase: 0, momentum: 0, now: 0.3))        // wheel mouse
+        for k in 0..<10 { g.frame(device: 0, locked: false, now: Double(k) * 0.01) }
+        expect(!drop(&g, phase: 1, 0.05) && !drop(&g, phase: 0, momentum: 2, 0.3))
+        expect(g.isIdle(now: 0.3))                                    // the filter stays off
     }
 
     func testLostLiftFrameNeverBlocksForever() {
         var g = ScrollGuard()
-        g.frame(locked: true, contacts: 3, now: 0)                    // then no more frames
-        expect(g.shouldDrop(phase: 2, momentum: 0, now: 0.2))
-        expect(!g.shouldDrop(phase: 0, momentum: 0, now: 5))          // wheel mouse, long after
-        expect(!g.shouldDrop(phase: 1, momentum: 0, now: 5.1))
+        g.frame(device: 0, locked: true, now: 0)                      // then no more frames
+        expect(drop(&g, 0.2))
+        expect(!drop(&g, phase: 1, 5))
+        expect(g.isIdle(now: 5))
     }
 
-    func testWheelMouseAfterASwipe() {
+    func testCoastingBlockExpires() {
         var g = ScrollGuard()
-        g.frame(locked: true, contacts: 3, now: 0)
-        g.frame(locked: false, contacts: 0, now: 0.1)
-        expect(!g.shouldDrop(phase: 0, momentum: 0, now: 0.6))        // after the tail: a mouse wheel scrolls
+        g.frame(device: 0, locked: true, now: 0)
+        g.frame(device: 0, locked: false, now: 0.1)
+        expect(!g.isIdle(now: 1))
+        expect(g.isIdle(now: 0.1 + ScrollGuard.momentumMax + 0.01))   // the filter goes off on its own
+        expect(!drop(&g, phase: 0, momentum: 2, 0.1 + ScrollGuard.momentumMax + 0.02))
     }
 
     func testSettingDecodes() throws {
@@ -337,5 +363,39 @@ struct ThumbCornerTests {
         var c = AppConfiguration(); var bad = GestureConfig(); bad.thumbCorner = 0.6; c.gestures = bad
         expect(c.validate().contains { $0.contains("thumbCorner") })
         expect(c.withDefaultsForOutOfRange().gestures?.thumbCorner == GestureConfig().thumbCorner)
+    }
+}
+
+/// Quitting or restarting right after a switch: entries that no longer match where windows are.
+struct InterruptedSwitchTests {
+    func entry(ws: Int, scr: String = "ext") -> ParkedWindow { ParkedWindow(ws: ws, scr: scr, x: 0, y: 0, w: 100, h: 100, z: 1) }
+
+    func testParkCutOffLeavesAVisibleWindowThatIsNotParked() {
+        var s = WorkspaceState()
+        s.hidden["1"] = entry(ws: 2)                     // its park never ran: it shows
+        s.hidden["2"] = entry(ws: 2)                     // really parked
+        s.hidden["3"] = entry(ws: 3)                     // park still on its way: leave it
+        let dropped = s.dropShown(shows: { $0 == 1 || $0 == 3 }, moving: { $0 == 3 })
+        expect(dropped == [1])
+        expect(!s.isParked(1) && s.isParked(2) && s.isParked(3))
+    }
+
+    func testRestoreCutOffIsBroughtBack() {
+        // Display "ext" shows workspace 2; window 5's restore to it was cut off by a restart and
+        // kept as an entry on workspace 2. Window 6 is on hidden workspace 3.
+        var s = WorkspaceState()
+        s.active["ext"] = 2
+        s.hidden["5"] = entry(ws: 2)
+        s.hidden["6"] = entry(ws: 3)
+        s.hidden["7"] = entry(ws: 1, scr: "builtin")     // builtin shows 1 (default): also stuck
+        let stuck = s.takeOnShowingWorkspace { _ in true }
+        expect(stuck.map(\.id) == [5, 7])
+        expect(!s.isParked(5) && s.isParked(6) && !s.isParked(7))
+    }
+
+    func testIneligibleEntriesStay() {
+        var s = WorkspaceState()
+        s.hidden["5"] = entry(ws: 1)
+        expect(s.takeOnShowingWorkspace { _ in false }.isEmpty && s.isParked(5))
     }
 }

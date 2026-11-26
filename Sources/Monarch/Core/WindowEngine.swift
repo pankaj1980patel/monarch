@@ -18,17 +18,22 @@ final class WindowEngine {
     /// a second after Monarch focuses a window itself, that window (the notifications take a few
     /// round trips; a second quick ⌘Tab must already see the first one's pick).
     var focusedID: CGWindowID? { pendingFocusID ?? focusedWindow[frontmostPID] }
-    private var pendingFocus: (id: CGWindowID, time: Double)?
+    private var pendingFocus: (id: CGWindowID, until: Double)?
 
-    /// The window Monarch is focusing, until macOS confirms it (at most 1.5 s: revealing a
-    /// parked window waits for its workspace switch).
+    /// The window Monarch is focusing, until macOS confirms it (at most 1.5 s for ⌘Tab and
+    /// reveals: revealing a parked window waits for its workspace switch).
     var pendingFocusID: CGWindowID? {
-        guard let p = pendingFocus, PerformanceMonitor.now() - p.time < 1.5 else { return nil }
+        guard let p = pendingFocus, PerformanceMonitor.now() < p.until else { return nil }
         return p.id
     }
 
-    /// Monarch just focused `id`: treat it as focused until macOS confirms.
-    func noteFocusing(_ id: CGWindowID) { pendingFocus = (id, PerformanceMonitor.now()) }
+    /// Monarch just focused `id`: treat it as focused until macOS confirms, or `seconds`.
+    /// Nothing to wait for if it's already the focused window (no confirmation would come,
+    /// and other focus changes would be ignored meanwhile).
+    func noteFocusing(_ id: CGWindowID, for seconds: Double = 1.5) {
+        if pendingFocusID == nil, focusedWindow[frontmostPID] == id { return }
+        pendingFocus = (id, PerformanceMonitor.now() + seconds)
+    }
 
     /// Listeners: the globally focused window changed (app switch, click, ⌘Tab, anything),
     /// a window closed, a window's frame/title/minimized state changed.

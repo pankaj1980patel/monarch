@@ -212,7 +212,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private static let queryNote = Notification.Name("dev.monarch.Monarch.query")
     private var queryToken: NSObjectProtocol?
     private var handoverToken: NSObjectProtocol?
-    /// Quitting to be started again (a newer copy taking over, or a rebuild's SIGHUP): parked
+    /// Quitting to be started again (a newer copy taking over, or a rebuild's SIGUSR1): parked
     /// windows stay parked for the next copy, which loads the saved state.
     var restarting = false
     private var agentRepairStopped = false

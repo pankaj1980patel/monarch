@@ -108,7 +108,12 @@ final class GestureController {
         wantRunning = active && c.enabled && !incompatible
         conflicts = Dock.conflicts()
         if wantRunning { bridge.start() } else { epoch.bump(); handle(bridge.stop(), at: PerformanceMonitor.now()) }
-        ScrollBlocker.setEnabled(wantRunning && c.blockScroll)
+        syncScrollBlocker()
+    }
+
+    /// The scroll filter exists only while gestures run on at least one trackpad.
+    private func syncScrollBlocker() {
+        ScrollBlocker.setEnabled(wantRunning && config.blockScroll && bridge.isRunning && bridge.deviceCount > 0)
     }
 
     /// Re-read native gesture settings (the menu opens; the user may have changed them).
@@ -129,7 +134,9 @@ final class GestureController {
     private func devicesChanged() {
         hotplugWork?.cancel()
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.wantRunning else { return }
+            guard let self else { return }
+            defer { self.syncScrollBlocker() }
+            guard self.wantRunning else { return }
             self.reset(stop: false, reason: "trackpad change")
             self.note("\(self.bridge.deviceCount) trackpad(s)")
         }

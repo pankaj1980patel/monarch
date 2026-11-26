@@ -199,7 +199,9 @@ final class AutoFocusManager {
         if let d = Geometry.display(for: w.frame, in: displays.displays) { history.record(window: id, display: d.id) }
         // Focused from now on, not when macOS confirms: a second quick ⌃⌥⇧ arrow then starts
         // from this window (it used to start again from the old one, so moved only one step).
-        engine.noteFocusing(id)
+        // Short: auto focus moves no windows, so macOS confirms within a few round trips. While
+        // it's pending, other focus changes (a click) are left out of the recent windows.
+        engine.noteFocusing(id, for: 0.4)
         WindowFocuser.focus(id, of: app, perf: perf, metric: metric, since: start)
     }
 

@@ -211,7 +211,7 @@ final class MultitouchBridge: @unchecked Sendable {
             devices[di].recognizer.process(UnsafeBufferPointer(rebasing: $0[0..<n]), time: time)
         }
         let me = di + 1
-        ScrollBlocker.frame(locked: devices[di].recognizer.current != nil, contacts: n)
+        ScrollBlocker.frame(device: di, locked: devices[di].recognizer.current != nil)
         if let s = devices[di].recognizer.current {
             // Take the live progress only if no other trackpad has a gesture going.
             let owner = progressOwner.compareExchange(expected: 0, desired: me, ordering: .relaxed).original

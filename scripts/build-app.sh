@@ -143,7 +143,11 @@ if [[ -x "$DEST/Contents/MacOS/$APP_NAME" ]] && "$DEST/Contents/MacOS/$APP_NAME"
   AGENT_ON=1
 fi
 if [[ "${1:-}" == "--run" || $AGENT_ON == 1 ]]; then
-  pkill -HUP -x "$APP_NAME" 2>/dev/null && sleep 0.5 || true    # SIGHUP: clean quit for a restart (keeps parked windows parked); launchd doesn't restart it
+  # SIGUSR1: clean quit for a restart (keeps parked windows parked); launchd doesn't restart it.
+  # Wait until it has really exited: a copy opened while the old one runs just leaves.
+  if pkill -USR1 -x "$APP_NAME" 2>/dev/null; then
+    for _ in $(seq 1 50); do pgrep -x "$APP_NAME" >/dev/null || break; sleep 0.1; done
+  fi
 fi
 mkdir -p "$HOME/Applications"
 # Update in place (same folder): the login agent's background-item record points at this

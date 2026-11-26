@@ -74,17 +74,22 @@ signal(SIGTERM, SIG_IGN)
 let termSource = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
 termSource.setEventHandler { MainActor.assumeIsolated { NSApp.terminate(nil) } }
 termSource.resume()
-// SIGHUP: quit to be restarted (scripts/build-app.sh). Like SIGTERM, but windows on hidden
-// workspaces stay parked: the next copy loads them from workspaces.json.
+// SIGHUP (the terminal a copy was started from closed): a normal quit, like SIGTERM.
 signal(SIGHUP, SIG_IGN)
 let hupSource = DispatchSource.makeSignalSource(signal: SIGHUP, queue: .main)
-hupSource.setEventHandler {
+hupSource.setEventHandler { MainActor.assumeIsolated { NSApp.terminate(nil) } }
+hupSource.resume()
+// SIGUSR1: quit to be restarted (scripts/build-app.sh). Like SIGTERM, but windows on hidden
+// workspaces stay parked: the next copy loads them from workspaces.json.
+signal(SIGUSR1, SIG_IGN)
+let restartSource = DispatchSource.makeSignalSource(signal: SIGUSR1, queue: .main)
+restartSource.setEventHandler {
     MainActor.assumeIsolated {
         (NSApp.delegate as? AppDelegate)?.restarting = true
         NSApp.terminate(nil)
     }
 }
-hupSource.resume()
+restartSource.resume()
 
 // Menu bar agent: no Dock icon, no main window (LSUIElement is also set in Info.plist).
 MainActor.assumeIsolated {

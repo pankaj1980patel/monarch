@@ -764,7 +764,7 @@ run("SystemShortcutTests.testDefaultBindingsOwnAllThree") { SystemShortcutTests(
 run("BootSessionTests.testEntriesFromAnEarlierBootAreDropped") { BootSessionTests().testEntriesFromAnEarlierBootAreDropped() }
 run("BootSessionTests.testSameBootKeepsEverything") { BootSessionTests().testSameBootKeepsEverything() }
 run("BootSessionTests.testFilesWithoutABootAreKeptAndStamped") { try BootSessionTests().testFilesWithoutABootAreKeptAndStamped() }
-run("QuitRestoreTests.testBuildScriptRestartsWithSIGHUP") { try QuitRestoreTests().testBuildScriptRestartsWithSIGHUP() }
+run("QuitRestoreTests.testBuildScriptRestartsWithSIGUSR1AndWaits") { try QuitRestoreTests().testBuildScriptRestartsWithSIGUSR1AndWaits() }
 run("QuitRestoreTests.testHandoverIdentifiesTheNewCopyByPid") { try QuitRestoreTests().testHandoverIdentifiesTheNewCopyByPid() }
 run("QuitRestoreTests.testQuitBringsParkedWindowsBack") { try QuitRestoreTests().testQuitBringsParkedWindowsBack() }
 run("ThumbAreaTests.testDefaultIsLeftThird") { ThumbAreaTests().testDefaultIsLeftThird() }
@@ -773,13 +773,6 @@ run("ThumbAreaTests.testBothSides") { ThumbAreaTests().testBothSides() }
 run("ThumbAreaTests.testAnywhere") { ThumbAreaTests().testAnywhere() }
 run("ThumbAreaTests.testWidth") { ThumbAreaTests().testWidth() }
 run("ThumbAreaTests.testDecodingAndValidation") { try ThumbAreaTests().testDecodingAndValidation() }
-run("ScrollGuardTests.testFingersLiftingOneByOneDontScroll") { ScrollGuardTests().testFingersLiftingOneByOneDontScroll() }
-run("ScrollGuardTests.testANewScrollAfterwardsWorks") { ScrollGuardTests().testANewScrollAfterwardsWorks() }
-run("ScrollGuardTests.testThumbAndFingerLeftDownDontScroll") { ScrollGuardTests().testThumbAndFingerLeftDownDontScroll() }
-run("ScrollGuardTests.testOrdinaryScrollingIsNeverTouched") { ScrollGuardTests().testOrdinaryScrollingIsNeverTouched() }
-run("ScrollGuardTests.testLostLiftFrameNeverBlocksForever") { ScrollGuardTests().testLostLiftFrameNeverBlocksForever() }
-run("ScrollGuardTests.testWheelMouseAfterASwipe") { ScrollGuardTests().testWheelMouseAfterASwipe() }
-run("ScrollGuardTests.testSettingDecodes") { try ScrollGuardTests().testSettingDecodes() }
 run("ThumbCornerTests.testCornerThumbMovingWithTheFingersIsLeftOut") { ThumbCornerTests().testCornerThumbMovingWithTheFingersIsLeftOut() }
 run("ThumbCornerTests.testCornerThumbPlusTwoFingersIsAScroll") { ThumbCornerTests().testCornerThumbPlusTwoFingersIsAScroll() }
 run("ThumbCornerTests.testCornerFollowsTheThumbArea") { ThumbCornerTests().testCornerFollowsTheThumbArea() }
@@ -788,5 +781,17 @@ run("ThumbCornerTests.testChosenCorners") { try ThumbCornerTests().testChosenCor
 run("ThumbCornerTests.testCornersOffCountsAMovingCornerContact") { ThumbCornerTests().testCornersOffCountsAMovingCornerContact() }
 run("ThumbCornerTests.testOffWithThumbRejectionOff") { ThumbCornerTests().testOffWithThumbRejectionOff() }
 run("ThumbCornerTests.testDecodingAndValidation") { try ThumbCornerTests().testDecodingAndValidation() }
+run("ScrollGuardTests.testFingersLiftingOneByOneDontScroll") { ScrollGuardTests().testFingersLiftingOneByOneDontScroll() }
+run("ScrollGuardTests.testRestingThumbDoesntKeepScrollingBlocked") { ScrollGuardTests().testRestingThumbDoesntKeepScrollingBlocked() }
+run("ScrollGuardTests.testMouseWheelIsNeverBlocked") { ScrollGuardTests().testMouseWheelIsNeverBlocked() }
+run("ScrollGuardTests.testSecondTrackpadCantEndTheFirstsSwipe") { ScrollGuardTests().testSecondTrackpadCantEndTheFirstsSwipe() }
+run("ScrollGuardTests.testANewScrollAfterwardsWorks") { ScrollGuardTests().testANewScrollAfterwardsWorks() }
+run("ScrollGuardTests.testOrdinaryScrollingIsNeverTouched") { ScrollGuardTests().testOrdinaryScrollingIsNeverTouched() }
+run("ScrollGuardTests.testLostLiftFrameNeverBlocksForever") { ScrollGuardTests().testLostLiftFrameNeverBlocksForever() }
+run("ScrollGuardTests.testCoastingBlockExpires") { ScrollGuardTests().testCoastingBlockExpires() }
+run("ScrollGuardTests.testSettingDecodes") { try ScrollGuardTests().testSettingDecodes() }
+run("InterruptedSwitchTests.testParkCutOffLeavesAVisibleWindowThatIsNotParked") { InterruptedSwitchTests().testParkCutOffLeavesAVisibleWindowThatIsNotParked() }
+run("InterruptedSwitchTests.testRestoreCutOffIsBroughtBack") { InterruptedSwitchTests().testRestoreCutOffIsBroughtBack() }
+run("InterruptedSwitchTests.testIneligibleEntriesStay") { InterruptedSwitchTests().testIneligibleEntriesStay() }
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

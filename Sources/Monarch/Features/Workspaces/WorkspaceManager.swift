@@ -62,6 +62,9 @@ final class WorkspaceManager {
                 moves.restoreArrived(w.id)
             }
             guard isActive, let e = state.parked(w.id), !moves.isParking(w.id) else { return }
+            // Displays changing: macOS moves parked windows around by itself. Not "brought back
+            // by hand": the entry stays (a blink back re-parks them; a real change restores all).
+            guard restoreWork == nil else { return }
             // Still off screen (where it was parked, or nudged by macOS): stays parked, with its
             // spot updated. Back on screen: brought back by hand, no longer parked.
             switch Parking.update(for: w.frame, entry: e, offScreen: isOffScreen(w.frame)) {
@@ -98,7 +101,8 @@ final class WorkspaceManager {
             restoreWork = nil
             // Without Hammerspoon nobody manages workspaces any more: windows left parked would
             // look lost. Bring them back.
-            if !Self.hammerspoonRunning, !state.hidden.isEmpty { restoreAllNow(timeout: 2) }
+            // Asynchronous: Monarch keeps running, and a hung app mustn't freeze the UI.
+            if !Self.hammerspoonRunning, !state.hidden.isEmpty { restoreAll() }
         }
     }
 
@@ -120,8 +124,42 @@ final class WorkspaceManager {
     /// to bring them back. `keepParked`: a restart (rebuild, handover to a newer copy), whose
     /// next copy loads the saved state.
     func prepareForQuit(keepParked: Bool) {
-        if isActive, !keepParked, !Self.hammerspoonRunning, !state.hidden.isEmpty { restoreAllNow(timeout: 2) }
+        // Moves still queued (a switch just before quitting) finish first: cut off, a restore
+        // left its window off screen with no entry, and a park left an entry for a window on
+        // screen.
+        if isActive, opsInFlight > 0 || !moves.restoring.isEmpty { drainAppQueues(timeout: 1.5) }
+        if isActive, keepParked {
+            dropEntriesShownOnScreen()
+            // Restores that didn't finish: still off screen, and their entries were removed when
+            // they started. Keep them on their workspace's display (now showing) for the next copy.
+            for (id, target) in moves.restoring where isOffScreen(WindowList.frame(of: id) ?? target) {
+                restoreLater(id, to: target)
+            }
+            save()
+        }
+        if isActive, !keepParked, !Self.hammerspoonRunning, !state.hidden.isEmpty || !moves.restoring.isEmpty { restoreAllNow(timeout: 2) }
         flushSave()
+    }
+
+    /// Waits (at most `timeout`) until every app queue has finished the work queued so far.
+    private func drainAppQueues(timeout: Double) {
+        let group = DispatchGroup()
+        for app in engine.apps.values { app.queue.async(group: group) { @Sendable in } }
+        _ = group.wait(timeout: .now() + timeout)
+    }
+
+    /// A restore that didn't finish before a restart: an entry on the now-showing workspace of
+    /// its target display, so the next copy's launch rescue or a switch can find it.
+    private func restoreLater(_ id: CGWindowID, to target: CGRect) {
+        guard let d = Geometry.display(for: target, in: displays.displays) ?? displays.displays.first else { return }
+        state.hidden[String(id)] = entry(for: target, ws: state.activeWorkspace(d.uuid), display: d, z: 1)
+    }
+
+    /// Entries whose window is actually on a display (a park that was cut off, an app that
+    /// refused the move): the window shows, so it isn't parked.
+    private func dropEntriesShownOnScreen() {
+        state.dropShown(shows: { [self] id in WindowList.frame(of: id).map { !isOffScreen($0) } ?? false },
+                        moving: { [self] id in moves.isParking(id) })
     }
 
     /// Every parked window back where it was on its display, waiting (at most `timeout`
@@ -134,6 +172,10 @@ final class WorkspaceManager {
             let target = Parking.fit(e.relativeFrame, into: d.visibleFrame.size)
                 .offsetBy(dx: d.visibleFrame.minX, dy: d.visibleFrame.minY)
             byApp[w.pid, default: []].append((id, target))
+        }
+        // Restores a switch started that haven't arrived (their entries are already gone).
+        for (id, target) in moves.restoring where state.hidden[String(id)] == nil {
+            if let w = engine.windows[id], isOffScreen(WindowList.frame(of: id) ?? w.frame) { byApp[w.pid, default: []].append((id, target)) }
         }
         let group = DispatchGroup()
         for (pid, restores) in byApp {
@@ -186,6 +228,7 @@ final class WorkspaceManager {
         let alive = Self.existingWindowIDs()
         let before = oldBoot ? -1 : state.hidden.count
         state.hidden = state.hidden.filter { UInt32($0.key).map(alive.contains) ?? false }
+        dropEntriesShownOnScreen()                      // a park cut off by a quit: it shows, so not parked
         if state.hidden.count != before || !FileManager.default.fileExists(atPath: Self.fileURL.path) { save() }
     }
 
@@ -434,9 +477,20 @@ final class WorkspaceManager {
             let rel = CGRect(x: 40, y: 40, width: f.width, height: f.height)
             restores.append((w.id, Parking.fit(rel, into: d.visibleFrame.size).offsetBy(dx: d.visibleFrame.minX, dy: d.visibleFrame.minY)))
         }
+        // Entries on the workspace that is showing (a restore cut off by a quit or restart):
+        // parked where nobody can switch to them. Back to their own place.
+        var previous: [CGWindowID: ParkedWindow] = [:]
+        let stuck = state.takeOnShowingWorkspace { [self] id in
+            engine.windows[id] != nil && !moves.isParking(id) && state.parked(id).flatMap { display($0.scr) } != nil
+        }
+        for (id, e) in stuck {
+            guard let d = display(e.scr) else { continue }
+            previous[id] = e
+            restores.append((id, Parking.fit(e.relativeFrame, into: d.visibleFrame.size).offsetBy(dx: d.visibleFrame.minX, dy: d.visibleFrame.minY)))
+        }
         guard !restores.isEmpty, let home = list.first else { return }
         let seq = ops.begin(displays: [], windows: restores.map(\.0))
-        run(seq: seq, parks: [], home: home, restores: restores) { [weak self] in self?.save() }
+        run(seq: seq, parks: [], home: home, restores: restores, previous: previous) { [weak self] in self?.save() }
     }
 
     /// ⌃⌥⇧ 0, and on display changes: every parked window back, all displays on workspace 1.
@@ -472,16 +526,41 @@ final class WorkspaceManager {
     func displaysChanged() {
         let now = Self.signature(displays.displays)
         guard isActive else { arrangement.accept(now); return }    // Hammerspoon owns the state while inactive
+        let wasPending = restoreWork != nil
         restoreWork?.cancel()
         restoreWork = nil
-        guard arrangement.changed(to: now) == .scheduleRestore else { return }   // blinked back: nothing changed
+        guard arrangement.changed(to: now) == .scheduleRestore else {
+            // Blinked back: nothing changed. Windows macOS pulled on screen meanwhile go back.
+            if wasPending { reparkShownLater() }
+            return
+        }
         let work = DispatchWorkItem { [weak self] in
             guard let self, self.isActive else { return }
+            self.restoreWork = nil
             guard self.arrangement.settle(Self.signature(self.displays.displays)), !self.state.hidden.isEmpty else { return }
             self.restoreAll()
         }
         restoreWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+    }
+
+    /// After a display blink: parked windows macOS moved onto a display are parked again,
+    /// once it has finished moving things (1 s).
+    private func reparkShownLater() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard let self, self.isActive, self.restoreWork == nil else { return }
+            var byDisplay: [String: [CGWindowID]] = [:]
+            for (k, e) in self.state.hidden {
+                guard let id = UInt32(k), self.engine.windows[id] != nil, !self.moves.isParking(id),
+                      let f = WindowList.frame(of: id), !self.isOffScreen(f) else { continue }
+                byDisplay[e.scr, default: []].append(id)
+            }
+            for (uuid, ids) in byDisplay {
+                guard let d = self.display(uuid) else { continue }
+                let seq = self.ops.begin(displays: [], windows: ids)
+                self.run(seq: seq, parks: ids, home: d, restores: []) { [weak self] in self?.save() }
+            }
+        }
     }
 
     // MARK: Window moves
