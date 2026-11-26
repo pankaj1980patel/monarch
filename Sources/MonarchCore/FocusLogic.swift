@@ -63,9 +63,10 @@ public enum FocusLogic {
     /// The window to focus when the mouse arrives on `display`, or nil to do nothing.
     ///
     /// 1. The focused window is already on that display: nothing to do.
-    /// 2. The window last used on that display.
-    /// 3. The most recently used window that is on that display.
-    /// 4. The top-most window on that display (`zOrder` is front-to-back; only called if needed).
+    /// 2. The top-most window there, if it was never used (a new window opened in the background).
+    /// 3. The window last used on that display.
+    /// 4. The most recently used window that is on that display.
+    /// 5. The top-most window on that display (`zOrder` is front-to-back).
     public static func windowForScreen(_ display: Display, displays: [Display], focused: UInt32?,
                                        windows: [UInt32: FocusCandidate], history: FocusHistory,
                                        zOrder: () -> [UInt32]) -> UInt32? {
@@ -74,9 +75,14 @@ public enum FocusLogic {
             return isUsable(w, on: display, in: displays)
         }
         if usable(focused) { return nil }
+        // A window in front that was never used there (opened in the background, or its focus
+        // came before Monarch knew it) is what the user sees: focus it, don't raise an older one
+        // over it (WhatsApp opened from a notification, then Slack popped up over it).
+        let front = zOrder().first(where: { usable($0) })
+        if let front, !history.mru.contains(front) { return front }
         if let last = history.lastByDisplay[display.id], usable(last) { return last }
         if let recent = history.mru.first(where: { usable($0) }) { return recent }
-        return zOrder().first(where: { usable($0) })
+        return front
     }
 
     public enum Direction: Sendable { case west, east, north, south }

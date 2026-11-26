@@ -821,14 +821,14 @@ struct FocusRegressionTests {
         h.record(window: 2, display: 2)      // recorded against another display, ignored for the LG
         h.record(window: 3, display: 3)
         expect(FocusLogic.windowForScreen(lg, displays: [lg, mac], focused: 3, windows: wins, history: h, zOrder: z) == 1)
-        expect(zCalls == 0)
+        expect(zCalls == 1)                  // the front window (2) was used before: history decides
         // Last used is gone: MRU supplies the next one on that display.
         var w2 = wins; w2[1] = cand(1, at(500, 500), min: true)
         expect(FocusLogic.windowForScreen(lg, displays: [lg, mac], focused: 3, windows: w2, history: h, zOrder: z) == 2)
         // Nothing in history: top-most in z-order.
         let fresh = FocusHistory()
         expect(FocusLogic.windowForScreen(lg, displays: [lg, mac], focused: 3, windows: wins, history: fresh, zOrder: z) == 2)
-        expect(zCalls == 1)
+        expect(zCalls == 3)
         // z-order skips unusable windows.
         expect(FocusLogic.windowForScreen(mac, displays: [lg, mac], focused: 1, windows: wins, history: fresh, zOrder: { [1, 2, 3] }) == 3)
         // Nothing usable anywhere: nil. Focused id unknown to the window list counts as not usable.

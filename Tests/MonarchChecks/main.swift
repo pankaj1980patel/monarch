@@ -189,11 +189,11 @@ struct FocusTests {
         h.record(window: 2, display: 2)
         h.record(window: 3, display: 2)          // Slack was the last used on the MacBook
         h.record(window: 1, display: 1)          // now working in iTerm on the LG
-        var zCalled = false
+        // The Dock raised every iTerm window, so the MacBook's iTerm is in front: Slack still
+        // wins, because iTerm was used before (only a never-used front window beats history).
         let pick = FocusLogic.windowForScreen(mac, displays: [lg, mac], focused: 1, windows: w, history: h,
-                                              zOrder: { zCalled = true; return [] })
+                                              zOrder: { [2, 3, 1] })
         expect(pick == 3)                        // Slack, not the other iTerm
-        expect(!zCalled)                         // no WindowServer query needed
 
         // Last-used window was parked (workspace switched): falls back to MRU on that screen.
         var w2 = w; w2[3] = cand(3, parked, pid: 20)
@@ -827,5 +827,6 @@ run("SimulationFindingsTests.testClickDuringAnOperationWinsOverItsFocus") { Simu
 run("SimulationFindingsTests.testOperationsWaitForDiscovery") { SimulationFindingsTests().testOperationsWaitForDiscovery() }
 run("OverviewDigitTests.testDigitKeyCodes") { OverviewDigitTests().testDigitKeyCodes() }
 run("OverviewDigitTests.testShiftDigitSendsSelectedWindow") { OverviewDigitTests().testShiftDigitSendsSelectedWindow() }
+run("NewWindowFocusTests.testNeverUsedFrontWindowBeatsLastUsed") { NewWindowFocusTests().testNeverUsedFrontWindowBeatsLastUsed() }
 print("\n\(checks) checks, \(failures) failed")
 exit(failures == 0 ? 0 : 1)

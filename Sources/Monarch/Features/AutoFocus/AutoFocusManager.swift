@@ -36,12 +36,25 @@ final class AutoFocusManager {
             // The window being picked may still be parked (macOS can report focus before the
             // restore's move has been read back): it still counts, on its own display.
             record(id, picked: engine.pendingFocusID == id)
+            // A new window's focus can arrive before the window itself: record it when it does.
+            focusedUnknown = engine.windows[id] == nil ? id : nil
         }
-        engine.onRemove { [unowned self] id in history.forget(window: id) }
+        engine.onUpdate { [unowned self] w in
+            guard w.id == focusedUnknown else { return }
+            focusedUnknown = nil
+            if engine.focusedID == w.id { record(w.id) }
+        }
+        engine.onRemove { [unowned self] id in
+            history.forget(window: id)
+            if focusedUnknown == id { focusedUnknown = nil }
+        }
         tracker.onCross = { id, p in MainActor.assumeIsolated { self.crossed(to: id, at: p) } }
         tracker.onHover = { MainActor.assumeIsolated { self.hovered() } }
         tracker.onFailure = { MainActor.assumeIsolated { self.tapFailed = true } }
     }
+
+    /// A window reported focused before Monarch knew it (not recorded yet).
+    private var focusedUnknown: CGWindowID?
 
     var isListening: Bool { tracker.isActive }
     /// Most recently used windows, newest first (fed by every focus change). Used by ⌘Tab.

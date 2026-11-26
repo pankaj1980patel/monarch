@@ -692,3 +692,30 @@ struct OverviewDigitTests {
         expect(OverviewModel.digitAction(keyCode: 0, shift: true, carrying: false, windowSelected: true) == nil)
     }
 }
+
+/// WhatsApp opened from a notification on the MacBook: its focus came before Monarch knew the
+/// window, so Slack stayed "last used" there, and moving the mouse over raised Slack over it.
+struct NewWindowFocusTests {
+    func cand(_ id: UInt32, _ f: CGRect, pid: Int32) -> FocusCandidate {
+        FocusCandidate(id: id, pid: pid, frame: f, isMinimized: false, appHidden: false)
+    }
+
+    func testNeverUsedFrontWindowBeatsLastUsed() {
+        let onMac = CGRect(x: 600, y: 1500, width: 700, height: 500), onLG = CGRect(x: 100, y: 100, width: 800, height: 600)
+        let slack: UInt32 = 3, whatsapp: UInt32 = 4, code: UInt32 = 1
+        let w = [code: cand(code, onLG, pid: 10), slack: cand(slack, onMac, pid: 20), whatsapp: cand(whatsapp, onMac, pid: 30)]
+        var h = FocusHistory()
+        h.record(window: slack, display: 2)
+        h.record(window: code, display: 1)
+        // WhatsApp is in front on the MacBook and was never recorded: it gets focus, Slack stays behind.
+        expect(FocusLogic.windowForScreen(mac, displays: [lg, mac], focused: code, windows: w, history: h,
+                                          zOrder: { [code, whatsapp, slack] }) == whatsapp)
+        // Once WhatsApp is recorded as used, history decides as before (Slack last used there).
+        h.record(window: whatsapp, display: 2); h.record(window: slack, display: 2); h.record(window: code, display: 1)
+        expect(FocusLogic.windowForScreen(mac, displays: [lg, mac], focused: code, windows: w, history: h,
+                                          zOrder: { [code, whatsapp, slack] }) == slack)
+        // Slack in front and last used: Slack (no change).
+        expect(FocusLogic.windowForScreen(mac, displays: [lg, mac], focused: code, windows: w, history: h,
+                                          zOrder: { [slack, whatsapp] }) == slack)
+    }
+}
